@@ -1,59 +1,127 @@
-# Disk Optimizer Pro V2 - Kamran Ashraf
+# 🚀 Disk Optimizer Pro V2
 
-An executive, high-performance Windows disk optimization and cleanup suite built to monitor and clean **both Local Disk C: and Local Disk D:** using automated, thoroughly-tested multi-threaded routines.
+<div align="center">
 
----
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Kamran5H/DiskOptimizerPro)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://github.com/Kamran5H/DiskOptimizerPro)
+[![GUI](https://img.shields.io/badge/GUI-CustomTkinter%20Modern%20Dark-6366F1?style=for-the-badge)](https://github.com/Kamran5H/DiskOptimizerPro)
+[![Safety](https://img.shields.io/badge/Safety-Kernel--Safe%20%7C%20Zero--Destruction-10B981?style=for-the-badge)](https://github.com/Kamran5H/DiskOptimizerPro)
 
-## What's New in V2
+**Executive dual-drive (C: & D:) Windows system cleanup, duplicate hunter, and disk optimization suite with a modern CustomTkinter GUI.**
 
-1. **Full Local Disk D: Support & Dual-Drive Telemetry**:
-   - Live side-by-side capacity, free space, and usage meters for **Drive C:** (~12 GB free) and **Drive D:** (~31 GB free).
-   - **Target Scope Selector**: Choose between `All Drives (C: & D:)`, `Drive C: Only`, or `Drive D: Only`.
-   - **D: Root VC++ Junk Cleaner**: Sweeps classic Visual C++ extraction leftovers (`eula.*.txt`, `install.*`, `VC_RED.*`, `globdata.ini`).
-   - **D: Developer Caches**: Cleans Python `__pycache__` and `.pytest_cache` directories on D:.
-   - **Multi-Drive Recycle Bin**: Empties `$RECYCLE.BIN` across all attached local drives.
-   - **Multi-Drive Shadow Storage**: Resizes shadow storage to 3% max on both C: and D: via `vssadmin`.
+[Features](#-features) • [Architecture](#-architecture) • [Safety Protocol](#-safety--whitelist-protocols) • [Installation](#-installation) • [License](#-license)
 
-2. **Advanced System & Developer Optimizers**:
-   - **Windows Delivery Optimization Cache**: Cleans cached peer-to-peer Windows update files.
-   - **Windows Prefetch Cache**: Cleans obsolete prefetch execution files (`C:\Windows\Prefetch`).
-   - **Memory & Kernel Dumps**: Cleans multi-gigabyte `C:\Windows\MEMORY.DMP` and `LiveKernelReports`.
-   - **DNS Resolver Cache**: Flushes network cache via `ipconfig /flushdns`.
-   - **Developer Super-Pack**: Cleans NPM package cache (`%LocalAppData%\npm-cache`), VS Code & Cursor caches, and Yarn cache.
-
-3. **Interactive Tabbed Tool Suite**:
-   - **Tab 1: 🚀 1-Click Optimizer**:
-     - Dual-drive telemetry header
-     - Scope switcher (`All Drives`, `Drive C:`, `Drive D:`)
-     - Presets: `Safe Fast Clean`, `Deep System Clean`, `Drive D: Clean`, `Developer Clean`, `Select All`
-     - Real-time terminal with live logs & space tally
-   - **Tab 2: 🔍 Large Files Finder**:
-     - Multi-drive scanning (Both Drives, Drive C:, Drive D:)
-     - Configurable thresholds (`>= 50 MB`, `>= 100 MB`, `>= 250 MB`, `>= 500 MB`, `>= 1 GB`)
-     - Open in Explorer & Delete Selected File actions
-   - **Tab 3: 👥 Fast Duplicate Files Finder**:
-     - High-performance 3-stage duplicate file detector (Size filter -> 4KB head hash -> full SHA-256)
-     - Shows wasted space and duplicate file paths
-     - Safe deletion of duplicate copies
-   - **Tab 4: 🧹 Empty Folders Cleaner**:
-     - Scans and safely removes orphan empty directory trees (protecting system folders)
-
-4. **One-Click Desktop Access**:
-   - Desktop Shortcut: `Disk Optimizer Pro - Kamran Ashraf.lnk`
-   - Automated UAC elevation on launch so all administrative commands execute seamlessly without permission errors.
+</div>
 
 ---
 
-## How to Run
+## 🌟 Executive Overview
 
-### Via Desktop Shortcut
-Double-click the **Disk Optimizer Pro - Kamran Ashraf** shortcut on your Desktop.
+**Disk Optimizer Pro V2** is a native Windows system optimization and disk hygiene suite built in Python with **CustomTkinter**. Designed specifically for power workstations with dual-drive configurations (System SSD `C:` and Secondary Storage `D:`), it provides a military-grade cleanup engine that safely reclaims tens of gigabytes of disk space while rigorously safeguarding essential operating system components, developer toolchains, and user credentials.
 
-### Via Command Line
-```powershell
-python "C:\Users\chkam\OneDrive\Desktop\DiskOptimizerPro\launcher.pyw"
+---
+
+## 🚀 Features
+
+- **💽 Dual-Drive Telemetry**: Real-time visual disk meter displaying capacity, used storage, and free space on both `C:` and `D:` partitions simultaneously.
+- **🧹 Deep System Hygiene (`cleaner_engine.py`)**:
+  - Windows Update residual files & Delivery Optimization caches
+  - Crash dumps, error reports, and diagnostic memory snapshots
+  - Temp directories (`%TEMP%`, `C:\Windows\Temp`)
+  - Web browser caches (Chrome, Edge, Brave, Firefox)
+  - Package manager caches (`pip`, `npm`, `yarn`, `cargo`)
+- **👯 High-Speed Duplicate Hunter (`duplicate_finder.py`)**: Multi-threaded duplicate detection combining file size pre-filtering with chunked cryptographic hashing (SHA256) to identify redundant files without reading full disk contents into RAM.
+- **📂 Recursive Empty Directory Pruner (`empty_folder_cleaner.py`)**: Safely purges abandoned, empty folder trees left behind by uninstalled software.
+- **📊 Large File Space Analyzer (`large_files.py`)**: Scans and sorts files exceeding configurable size thresholds (e.g. >100MB / >1GB) for immediate manual review.
+- **🎨 Modern CustomTkinter Dark Theme**: Sleek, high-contrast dark GUI with responsive progress animations, scan statistics, and selective confirmation toggles.
+
+---
+
+## 🛡️ Safety & Whitelist Protocols
+
+Disk Optimizer Pro enforces non-negotiable safety guardrails to ensure system stability:
+- **Zero OS Destruction**: System-critical directories (`System32`, `WinSxS`, `Boot`, driver stores) are permanently hardcoded into immutable exclusion lists.
+- **Developer Safety**: Preserves active Git repositories (`.git/`), IDE settings (`.vscode`, `.idea`), and active virtual environments.
+- **Lock Detection**: Skips files actively locked by running Windows processes without crashing.
+- **Recycle Bin Routing**: Optional safe-delete mode moves files to the Windows Recycle Bin rather than permanently unlinking them.
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart TD
+    A[CustomTkinter GUI Bridge: gui/] --> B[System Telemetry: system_ops.py]
+    B --> C{Optimization Engine}
+    
+    subgraph Core Modules [engine/]
+        C --> D[cleaner_engine.py: Temp / Logs / Caches]
+        C --> E[duplicate_finder.py: SHA256 Chunked Hashing]
+        C --> F[empty_folder_cleaner.py: Recursive Tree Pruner]
+        C --> G[large_files.py: Space Hog Inspector]
+    end
+    
+    Core Modules --> H[Safety Validator & Whitelist Filter]
+    H --> I{Execute Action}
+    I -->|Safe Deletion| J[(Recycle Bin / Reclaimed Space)]
 ```
-Or for direct console launch:
-```powershell
-python "C:\Users\chkam\OneDrive\Desktop\DiskOptimizerPro\main.py"
+
+---
+
+## 📁 Repository Structure
+
+```text
+DiskOptimizerPro/
+├── main.py                     # Primary GUI application entry point
+├── launcher.pyw                # Windowless background launcher
+├── create_shortcut.py          # Desktop shortcut installer script
+├── engine/                     # Core backend execution modules
+│   ├── cleaner_engine.py       # Temporary files, caches, and logs cleanup logic
+│   ├── duplicate_finder.py     # Fast cryptographic duplicate file detector
+│   ├── empty_folder_cleaner.py # Tree-walking empty folder pruner
+│   ├── large_files.py          # Heavy storage consumer scanner
+│   └── system_ops.py           # Drive space calculation & Windows shell APIs
+├── gui/                        # CustomTkinter interface components & styling
+├── assets/                     # Icons, logos, and UI graphics
+├── tests/                      # Automated safety and engine test suites
+├── .gitignore                  # Python & Windows build artifact exclusions
+└── LICENSE                     # Open-source MIT License
 ```
+
+---
+
+## ⚡ Installation
+
+### Prerequisites
+- Windows 10 or 11
+- Python 3.10 or higher
+
+### Setup
+```bash
+git clone https://github.com/Kamran5H/DiskOptimizerPro.git
+cd DiskOptimizerPro
+
+# Setup virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# Install requirements
+pip install customtkinter psutil send2trash
+```
+
+### Launch
+```bash
+# Launch interactive GUI
+python main.py
+
+# Or create a Desktop Shortcut:
+python create_shortcut.py
+```
+
+---
+
+## 📜 License
+
+This project is open-source and released under the [MIT License](LICENSE).  
+Copyright (c) 2024-2026 **Kamran Ashraf**.
