@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Callable, Optional
+from typing import List, Dict, Callable, Optional, Tuple
 
 
 def scan_large_files_multi(
@@ -29,7 +29,11 @@ def scan_large_files_multi(
         roots = get_all_detected_drives()
 
     min_bytes = int(min_size_mb * 1024 * 1024)
-    found_files: List[Dict] = []
+    import heapq
+    # Min-heap stores tuples: (size_bytes, counter, item_dict)
+    heap: List[Tuple[int, int, Dict]] = []
+    item_counter = 0
+    total_found_count = 0
     scanned_dirs = 0
 
     skip_dirs = {
@@ -53,8 +57,8 @@ def scan_large_files_multi(
             if stop_check and stop_check():
                 if log_cb:
                     log_cb("Scan cancelled by user.", "warning")
-                found_files.sort(key=lambda x: x["size_bytes"], reverse=True)
-                return found_files[:top_n]
+                sorted_results = [item for _, _, item in sorted(heap, key=lambda x: x[0], reverse=True)]
+                return sorted_results
 
             # Filter out system/protected dirs and hidden $-prefixed dirs
             dirnames[:] = [
@@ -65,21 +69,21 @@ def scan_large_files_multi(
             scanned_dirs += 1
             if scanned_dirs % 1500 == 0 and log_cb:
                 log_cb(
-                    f"Scanned {scanned_dirs} directories... (Found {len(found_files)} large files)",
+                    f"Scanned {scanned_dirs} directories... (Found {total_found_count} large files)",
                     "info"
                 )
 
             for f in filenames:
                 try:
                     full_path = os.path.join(dirpath, f)
-                    # Skip symlinks — they may point elsewhere
                     if os.path.islink(full_path):
                         continue
                     size = os.path.getsize(full_path)
                     if size >= min_bytes:
+                        total_found_count += 1
                         drive_letter = os.path.splitdrive(full_path)[0].upper()
                         _, ext = os.path.splitext(f)
-                        found_files.append({
+                        item_dict = {
                             "name": f,
                             "drive": drive_letter,
                             "path": full_path,
@@ -87,16 +91,20 @@ def scan_large_files_multi(
                             "size_mb": round(size / (1024 * 1024), 1),
                             "size_gb": round(size / (1024 ** 3), 2),
                             "ext": ext.lower(),
-                        })
+                        }
+                        item_counter += 1
+                        if len(heap) < top_n:
+                            heapq.heappush(heap, (size, item_counter, item_dict))
+                        elif size > heap[0][0]:
+                            heapq.heappushpop(heap, (size, item_counter, item_dict))
                 except (OSError, PermissionError):
                     continue
 
-    found_files.sort(key=lambda x: x["size_bytes"], reverse=True)
-    top_results = found_files[:top_n]
+    top_results = [item for _, _, item in sorted(heap, key=lambda x: x[0], reverse=True)]
 
     if log_cb:
         log_cb(
-            f"Scan complete. Found {len(found_files)} files >= {min_size_mb} MB "
+            f"Scan complete. Found {total_found_count} files >= {min_size_mb} MB "
             f"across {', '.join(roots)}. Showing top {len(top_results)}.",
             "success"
         )

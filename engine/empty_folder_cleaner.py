@@ -35,7 +35,7 @@ def is_protected(path: str, base_root: str) -> bool:
     sys_root = os.path.normpath(
         os.environ.get("SystemRoot", r"C:\Windows")
     ).lower()
-    if norm_path.startswith(sys_root):
+    if norm_path == sys_root or norm_path.startswith(sys_root + os.sep):
         return True
 
     # Program Files
@@ -45,9 +45,9 @@ def is_protected(path: str, base_root: str) -> bool:
     prog_files_x86 = os.path.normpath(
         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     ).lower()
-    if norm_path.startswith(prog_files) or (
-        prog_files_x86 and norm_path.startswith(prog_files_x86)
-    ):
+    if norm_path == prog_files or norm_path.startswith(prog_files + os.sep):
+        return True
+    if prog_files_x86 and (norm_path == prog_files_x86 or norm_path.startswith(prog_files_x86 + os.sep)):
         return True
 
     parts = set(norm_path.split(os.sep))

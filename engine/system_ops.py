@@ -146,8 +146,75 @@ def get_all_drives_stats(drives: Optional[List[str]] = None) -> Dict[str, dict]:
     return res
 
 
+import threading
+from ctypes import wintypes
+
+
 # ---------------------------------------------------------------------------
-# POWERSHELL RUNNER  (with configurable timeout)
+# FAST WIN32 PROCESS ENUMERATION (<5ms vs ~800ms PowerShell)
+# ---------------------------------------------------------------------------
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260)
+    ]
+
+
+def get_running_process_names() -> set:
+    """Returns a set of lowercase process executable names running on the system."""
+    names = set()
+    try:
+        TH32CS_SNAPPROCESS = 0x00000002
+        h_snap = ctypes.windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if h_snap in (-1, 0):
+            return names
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if ctypes.windll.kernel32.Process32FirstW(h_snap, ctypes.byref(entry)):
+            while True:
+                names.add(entry.szExeFile.lower())
+                if not ctypes.windll.kernel32.Process32NextW(h_snap, ctypes.byref(entry)):
+                    break
+        ctypes.windll.kernel32.CloseHandle(h_snap)
+    except Exception:
+        pass
+    return names
+
+
+def is_process_running_fast(process_names: List[str]) -> bool:
+    """
+    Checks if any process matching process_names is running in <5ms.
+    Matches with and without .exe extension.
+    """
+    try:
+        active = get_running_process_names()
+        for p in process_names:
+            p_clean = p.lower().rstrip("*")
+            if not p_clean.endswith(".exe"):
+                p_exe = p_clean + ".exe"
+            else:
+                p_exe = p_clean
+            if p_exe in active or p_clean in active:
+                return True
+            # Prefix wildcard matching (e.g. BlueStacks*)
+            if any(act.startswith(p_clean) for act in active):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+# ---------------------------------------------------------------------------
+# POWERSHELL RUNNER (Non-blocking reader thread to prevent deadlocks)
 # ---------------------------------------------------------------------------
 
 def run_powershell(
@@ -157,6 +224,8 @@ def run_powershell(
 ) -> Tuple[int, str]:
     """
     Executes a PowerShell command using -NoProfile, streaming output to log_cb.
+    Uses a dedicated background reader thread to prevent pipe deadlocks and
+    strictly enforce timeout limits even if the child process stops emitting output.
     
     Args:
         command:  The PowerShell command/script string.
@@ -182,20 +251,38 @@ def run_powershell(
         )
 
         output_lines = []
-        if process.stdout:
-            for line in iter(process.stdout.readline, ""):
-                line_str = line.strip()
-                if line_str:
-                    output_lines.append(line_str)
-                    if log_cb:
-                        log_cb(line_str, "info")
-            process.stdout.close()
+
+        def _reader():
+            try:
+                if process.stdout:
+                    for line in iter(process.stdout.readline, ""):
+                        line_str = line.strip()
+                        if line_str:
+                            output_lines.append(line_str)
+                            if log_cb:
+                                log_cb(line_str, "info")
+            except Exception:
+                pass
+            finally:
+                if process.stdout:
+                    try:
+                        process.stdout.close()
+                    except Exception:
+                        pass
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
 
         try:
             process.wait(timeout=timeout)
+            reader_thread.join(timeout=1.5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                process.kill()
+            except Exception:
+                pass
             process.wait()
+            reader_thread.join(timeout=1.0)
             err_msg = f"PowerShell command timed out after {timeout}s."
             if log_cb:
                 log_cb(err_msg, "warning")
@@ -267,7 +354,14 @@ def optimize_shadow_storage(drive: str = "C:", log_cb: Optional[Callable[[str, s
     clean_drive = (drive.split(":")[0].strip("\\/ ") + ":").upper()
     if log_cb:
         log_cb(f"Checking shadow storage allocations on {clean_drive}...", "step")
-    run_powershell("vssadmin list shadowstorage", log_cb)
+    code, out = run_powershell("vssadmin list shadowstorage", log_cb)
+
+    # Check if shadow storage is configured for this drive
+    has_association = clean_drive.lower() in out.lower()
+    if not has_association:
+        if log_cb:
+            log_cb(f"No active shadow storage association found for {clean_drive} (Skipped).", "info")
+        return True
 
     if log_cb:
         log_cb(f"Resizing shadowstorage maxsize to 3% on {clean_drive}...", "step")

@@ -68,6 +68,7 @@ def find_duplicate_files(
     # STAGE 1 — Collect files, grouped by size
     # ----------------------------------------------------------------
     size_map: Dict[int, List[str]] = defaultdict(list)
+    seen_inodes = set()
     scanned_count = 0
 
     for root_dir in roots:
@@ -90,8 +91,14 @@ def find_duplicate_files(
                     p = os.path.join(dirpath, f)
                     if os.path.islink(p):   # skip symlinks
                         continue
-                    sz = os.path.getsize(p)
+                    st = os.stat(p)
+                    sz = st.st_size
                     if sz >= min_size_bytes:
+                        # Avoid counting hard-links as distinct duplicate copies
+                        inode_key = (st.st_dev, st.st_ino)
+                        if inode_key in seen_inodes and st.st_nlink > 1:
+                            continue
+                        seen_inodes.add(inode_key)
                         size_map[sz].append(p)
                         scanned_count += 1
                 except (OSError, PermissionError):

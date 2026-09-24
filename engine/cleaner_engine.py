@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import shutil
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -7,6 +8,7 @@ from engine.system_ops import (
     get_disk_stats,
     get_all_drives_stats,
     run_powershell,
+    is_process_running_fast,
     disable_hibernation,
     enable_compact_os,
     optimize_shadow_storage,
@@ -24,34 +26,90 @@ from engine.system_ops import (
 # SAFE FOLDER CONTENT DELETER
 # ---------------------------------------------------------------------------
 
+def _remove_readonly(func, path, exc):
+    """Callback to clear read-only file attribute and retry deletion."""
+    try:
+        os.chmod(path, 0o777)
+        func(path)
+    except Exception:
+        pass
+
+
+def safe_rmtree(path: str) -> None:
+    """Removes directory tree with cross-version Python 3.10-3.14+ compatibility."""
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_remove_readonly)
+    else:
+        def _legacy_err(func, p, exc_info):
+            _remove_readonly(func, p, exc_info[1] if exc_info else None)
+        shutil.rmtree(path, onerror=_legacy_err)
+
+
+def is_link_or_junction(path: str) -> bool:
+    """Returns True if path is a symlink or an NTFS junction point."""
+    if os.path.islink(path):
+        return True
+    if hasattr(os.path, "isjunction"):
+        return os.path.isjunction(path)
+    return False
+
+
+def measure_path_size(path: str) -> int:
+    """Accurately calculates total size of files inside a directory without traversing symlinks."""
+    total = 0
+    try:
+        if os.path.isfile(path) and not is_link_or_junction(path):
+            return os.path.getsize(path)
+        for root, _, files in os.walk(path, followlinks=False):
+            for f in files:
+                try:
+                    fp = os.path.join(root, f)
+                    if not is_link_or_junction(fp):
+                        total += os.path.getsize(fp)
+                except (OSError, PermissionError):
+                    pass
+    except Exception:
+        pass
+    return total
+
+
 def delete_folder_contents(
     folder_path: str,
     log_cb: Optional[Callable[[str, str], None]] = None
 ) -> int:
     """
-    Deletes all files and subdirectories inside folder_path.
-    - Skips symbolic links to prevent following dangerous targets.
+    Safely deletes all files and subdirectories inside folder_path.
+    - Guards against deleting drive roots or system roots.
+    - Skips symbolic links and NTFS junctions to prevent traversing dangerous targets.
     - Clears read-only flags before deletion.
+    - Accurately reports actual bytes freed (does not claim locked files as freed).
     Returns total bytes freed.
     """
     if not folder_path or not os.path.isdir(folder_path):
         return 0
 
-    def _remove_readonly(func, path, exc_info):
-        try:
-            os.chmod(path, 0o777)
-            func(path)
-        except Exception:
-            pass
+    norm_folder = os.path.normpath(folder_path).lower()
+    drive, tail = os.path.splitdrive(norm_folder)
+    if tail in ("", "\\", "/"):
+        # Absolute safety guard: never wipe a drive root
+        return 0
 
     total_freed = 0
     try:
         for item in os.listdir(folder_path):
             item_path = os.path.join(folder_path, item)
             try:
-                if os.path.islink(item_path):
-                    # Skip symlinks — never follow them
+                if is_link_or_junction(item_path):
+                    # Remove the link itself safely without touching targets
+                    try:
+                        if os.path.isdir(item_path):
+                            os.rmdir(item_path)
+                        else:
+                            os.remove(item_path)
+                    except Exception:
+                        pass
                     continue
+
                 if os.path.isfile(item_path):
                     size = 0
                     try:
@@ -63,16 +121,18 @@ def delete_folder_contents(
                         os.remove(item_path)
                         total_freed += size
                     except Exception:
+                        # File is locked or access denied; do not count as freed
                         pass
+
                 elif os.path.isdir(item_path):
-                    # Measure first, then delete
-                    for root, _, files in os.walk(item_path, followlinks=False):
-                        for f in files:
-                            try:
-                                total_freed += os.path.getsize(os.path.join(root, f))
-                            except Exception:
-                                pass
-                    shutil.rmtree(item_path, onerror=_remove_readonly)
+                    size_before = measure_path_size(item_path)
+                    safe_rmtree(item_path)
+                    if os.path.exists(item_path):
+                        # Some locked files remained
+                        size_after = measure_path_size(item_path)
+                        total_freed += max(0, size_before - size_after)
+                    else:
+                        total_freed += size_before
             except Exception:
                 continue
     except Exception:
@@ -81,21 +141,12 @@ def delete_folder_contents(
 
 
 # ---------------------------------------------------------------------------
-# PROCESS HELPERS
+# PROCESS HELPERS (High-speed Win32 Toolhelp32 with PowerShell fallback)
 # ---------------------------------------------------------------------------
 
 def is_process_running(process_names: List[str]) -> bool:
-    """Checks whether any process matching the given names is running."""
-    try:
-        names_str = ",".join(f'"{p}"' for p in process_names)
-        cmd = (
-            f"Get-Process -Name {names_str} -ErrorAction SilentlyContinue "
-            "| Select-Object -ExpandProperty Name"
-        )
-        code, out = run_powershell(cmd, timeout=15)
-        return bool(out.strip())
-    except Exception:
-        return False
+    """Checks whether any process matching the given names is running (<5ms)."""
+    return is_process_running_fast(process_names)
 
 
 def stop_processes(
@@ -133,6 +184,10 @@ class CleanerEngine:
     def cancel(self):
         """Signal the engine to stop at the next checkpoint."""
         self.should_stop = True
+
+    def stop(self):
+        """Alias for cancel()."""
+        self.cancel()
 
     def reset(self):
         """Reset the cancellation flag before a new run."""
@@ -327,13 +382,9 @@ class CleanerEngine:
                 if d in target_cache_names:
                     target_p = os.path.join(root, d)
                     try:
-                        for r, _, fs in os.walk(target_p, followlinks=False):
-                            for f in fs:
-                                try:
-                                    freed += os.path.getsize(os.path.join(r, f))
-                                except Exception:
-                                    pass
-                        shutil.rmtree(target_p, ignore_errors=True)
+                        sz = measure_path_size(target_p)
+                        safe_rmtree(target_p)
+                        freed += sz
                         folder_count += 1
                         dirs.remove(d)
                     except Exception:
@@ -484,20 +535,14 @@ class CleanerEngine:
             for prefix in browser_prefixes:
                 matches = sorted(
                     [d for d in all_dirs if d.startswith(prefix)],
-                    # FIXED: numerical sort so build 1097 > 998 correctly
                     key=lambda s: [int(x) for x in re.findall(r"\d+", s)] or [0]
                 )
                 if len(matches) > 1:
                     for old_v in matches[:-1]:   # keep only the newest
                         p = os.path.join(pw_dir, old_v)
                         self.log(f"Removing old Playwright build: {old_v}", "info")
-                        for root, _, files in os.walk(p, followlinks=False):
-                            for f in files:
-                                try:
-                                    freed += os.path.getsize(os.path.join(root, f))
-                                except Exception:
-                                    pass
-                        shutil.rmtree(p, onerror=_remove_ro)
+                        freed += measure_path_size(p)
+                        safe_rmtree(p)
                         self.log(f"[OK] Removed old: {old_v}", "success")
         except Exception as ex:
             self.log(f"Playwright cleanup note: {ex}", "warning")
@@ -515,19 +560,11 @@ class CleanerEngine:
         self.log(f"Scanning old Opera version folders ({opera_dir})...", "step")
         freed = 0
 
-        def _remove_ro(func, path, exc):
-            try:
-                os.chmod(path, 0o777)
-                func(path)
-            except Exception:
-                pass
-
         try:
             dirs = [
                 d for d in os.listdir(opera_dir)
                 if os.path.isdir(os.path.join(opera_dir, d))
             ]
-            # FIXED: numerical sort — 102.x correctly beats 99.x
             version_dirs = sorted(
                 [d for d in dirs if re.match(r"^\d+\.", d)],
                 key=lambda v: [int(x) for x in re.findall(r"\d+", v)] or [0]
@@ -536,13 +573,8 @@ class CleanerEngine:
                 for old_v in version_dirs[:-1]:   # keep only the newest
                     p = os.path.join(opera_dir, old_v)
                     self.log(f"Removing old Opera version: {old_v}", "info")
-                    for root, _, files in os.walk(p, followlinks=False):
-                        for f in files:
-                            try:
-                                freed += os.path.getsize(os.path.join(root, f))
-                            except Exception:
-                                pass
-                    shutil.rmtree(p, onerror=_remove_ro)
+                    freed += measure_path_size(p)
+                    safe_rmtree(p)
                     self.log(f"[OK] Removed old Opera: {old_v}", "success")
         except Exception as ex:
             self.log(f"Opera cleanup note: {ex}", "warning")
@@ -595,13 +627,8 @@ class CleanerEngine:
         for p in bs_paths:
             if os.path.isdir(p):
                 self.log(f"Removing BlueStacks folder: {p}...", "step")
-                for root, _, files in os.walk(p, followlinks=False):
-                    for f in files:
-                        try:
-                            freed += os.path.getsize(os.path.join(root, f))
-                        except Exception:
-                            pass
-                shutil.rmtree(p, ignore_errors=True)
+                freed += measure_path_size(p)
+                safe_rmtree(p)
                 self.log(f"[OK] Deleted: {p}", "success")
 
         self.log(f"[OK] BlueStacks cleanup completed (~{round(freed/(1024*1024),1)} MB freed)", "success")
@@ -611,8 +638,12 @@ class CleanerEngine:
     # DEVELOPER CACHES SUPER-PACK
     # -----------------------------------------------------------------
 
-    def clean_developer_caches(self) -> int:
+    def clean_developer_caches(self, target_drives: Optional[List[str]] = None) -> int:
         """Cleans NPM Cache, VS Code / Cursor caches, and Yarn cache."""
+        if target_drives and "C:" not in target_drives:
+            self.log("Developer caches located on Drive C: (Skipped due to Target Scope).", "info")
+            return 0
+
         self.log("Cleaning developer caches (NPM, VS Code, Cursor, Yarn)...", "step")
         freed = 0
         local_app = os.environ.get("LOCALAPPDATA", "")

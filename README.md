@@ -51,9 +51,9 @@ Double-click the **Disk Optimizer Pro - Kamran Ashraf** shortcut on your Desktop
 
 ### Via Command Line
 ```powershell
-python "C:\Users\chkam\OneDrive\Desktop\DiskOptimizerPro\launcher.pyw"
+python "C:\Users\chkam\OneDrive\Desktop\02_Projects & Development\DiskOptimizerPro\launcher.pyw"
 ```
 Or for direct console launch:
 ```powershell
-python "C:\Users\chkam\OneDrive\Desktop\DiskOptimizerPro\main.py"
+python "C:\Users\chkam\OneDrive\Desktop\02_Projects & Development\DiskOptimizerPro\main.py"
 ```

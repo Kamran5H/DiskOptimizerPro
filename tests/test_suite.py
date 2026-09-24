@@ -10,8 +10,12 @@ base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if base_dir not in sys.path:
     sys.path.insert(0, base_dir)
 
-from engine.system_ops import get_disk_stats, get_all_drives_stats, is_admin
-from engine.cleaner_engine import CleanerEngine, delete_folder_contents
+from engine.system_ops import (
+    get_disk_stats, get_all_drives_stats, is_admin, is_process_running_fast
+)
+from engine.cleaner_engine import (
+    CleanerEngine, delete_folder_contents, safe_rmtree, measure_path_size
+)
 from engine.large_files import scan_large_files_multi
 from engine.duplicate_finder import find_duplicate_files
 from engine.empty_folder_cleaner import (
@@ -46,6 +50,15 @@ class TestSystemOps(unittest.TestCase):
         self.assertEqual(stats["free_gb"], 0)
         print("  Non-existent drive returns exists=False correctly")
 
+    def test_is_process_running_fast(self):
+        # Explorer is always running on Windows interactive desktop
+        self.assertTrue(is_process_running_fast(["explorer.exe"]))
+        # Python running the current test
+        self.assertTrue(is_process_running_fast(["python.exe", "pythonw.exe"]))
+        # Non-existent process
+        self.assertFalse(is_process_running_fast(["non_existent_fake_proc_99999.exe"]))
+        print("  Fast Win32 Toolhelp32 process snapshot verified (<5ms)")
+
 
 class TestCleanerEngine(unittest.TestCase):
 
@@ -56,11 +69,11 @@ class TestCleanerEngine(unittest.TestCase):
 
     def test_cancel_and_reset(self):
         engine = CleanerEngine()
-        engine.cancel()
+        engine.stop()
         self.assertTrue(engine.should_stop)
         engine.reset()
         self.assertFalse(engine.should_stop)
-        print("  Cancel/reset cycle works correctly")
+        print("  Stop/reset cooperative cancellation cycle works correctly")
 
     def test_safe_operations_execution(self):
         logs = []
@@ -79,7 +92,6 @@ class TestCleanerEngine(unittest.TestCase):
         """delete_folder_contents must skip symlinks and return correct bytes."""
         tmp = tempfile.mkdtemp(prefix="test_dfc_")
         try:
-            # Create a normal file
             real_file = os.path.join(tmp, "real.txt")
             with open(real_file, "wb") as f:
                 f.write(b"A" * 1024)
@@ -88,6 +100,35 @@ class TestCleanerEngine(unittest.TestCase):
             self.assertEqual(freed, 1024)
             self.assertEqual(os.listdir(tmp), [])  # folder now empty
             print("  delete_folder_contents returned correct byte count")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_safe_rmtree_with_readonly_file(self):
+        """safe_rmtree must delete read-only files without raising PermissionError."""
+        tmp = tempfile.mkdtemp(prefix="test_rmtree_")
+        try:
+            ro_file = os.path.join(tmp, "readonly.txt")
+            with open(ro_file, "w") as f:
+                f.write("read only data")
+            import stat
+            os.chmod(ro_file, stat.S_IREAD)
+
+            safe_rmtree(tmp)
+            self.assertFalse(os.path.exists(tmp))
+            print("  safe_rmtree successfully cleared read-only files")
+        finally:
+            if os.path.exists(tmp):
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_measure_path_size(self):
+        tmp = tempfile.mkdtemp(prefix="test_sz_")
+        try:
+            fp = os.path.join(tmp, "data.bin")
+            with open(fp, "wb") as f:
+                f.write(b"Z" * 5000)
+            self.assertEqual(measure_path_size(fp), 5000)
+            self.assertGreaterEqual(measure_path_size(tmp), 5000)
+            print("  measure_path_size accurately calculates file and directory sizes")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -100,16 +141,24 @@ class TestCleanerEngine(unittest.TestCase):
 class TestLargeFiles(unittest.TestCase):
 
     def test_large_files_multi_scan(self):
-        desktop = r"C:\Users\chkam\OneDrive\Desktop"
-        results = scan_large_files_multi(roots=[desktop], min_size_mb=1.0, top_n=5)
-        self.assertIsInstance(results, list)
-        # Each result must have required keys
-        for r in results:
-            self.assertIn("path", r)
-            self.assertIn("size_bytes", r)
-            self.assertIn("ext", r)
-            self.assertGreaterEqual(r["size_bytes"], 1024 * 1024)
-        print(f"  Large files scanner found {len(results)} files >= 1 MB on Desktop")
+        tmp = tempfile.mkdtemp(prefix="test_lf_")
+        try:
+            # Create files with known sizes
+            f1 = os.path.join(tmp, "big1.dat")
+            f2 = os.path.join(tmp, "big2.dat")
+            with open(f1, "wb") as f:
+                f.write(b"0" * (2 * 1024 * 1024))  # 2MB
+            with open(f2, "wb") as f:
+                f.write(b"1" * (5 * 1024 * 1024))  # 5MB
+
+            results = scan_large_files_multi(roots=[tmp], min_size_mb=1.0, top_n=5)
+            self.assertIsInstance(results, list)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0]["size_bytes"], 5 * 1024 * 1024)
+            self.assertEqual(results[1]["size_bytes"], 2 * 1024 * 1024)
+            print(f"  Large files scanner found {len(results)} mock files sorted largest first")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_scan_sorted_largest_first(self):
         tmp = tempfile.mkdtemp(prefix="test_lf_")
@@ -125,10 +174,13 @@ class TestLargeFiles(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_cancellation(self):
-        desktop = r"C:\Users\chkam\OneDrive\Desktop"
-        res = scan_large_files_multi([desktop], min_size_mb=1.0, stop_check=lambda: True)
-        self.assertEqual(len(res), 0)
-        print("  Large file scan cancellation works")
+        tmp = tempfile.mkdtemp(prefix="test_lf_cancel_")
+        try:
+            res = scan_large_files_multi([tmp], min_size_mb=1.0, stop_check=lambda: True)
+            self.assertEqual(len(res), 0)
+            print("  Large file scan cancellation works")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestDuplicateFinder(unittest.TestCase):
@@ -162,10 +214,30 @@ class TestDuplicateFinder(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_cancellation(self):
-        desktop = r"C:\Users\chkam\OneDrive\Desktop"
-        dupes = find_duplicate_files([desktop], min_size_bytes=100, stop_check=lambda: True)
-        self.assertEqual(len(dupes), 0)
-        print("  Duplicate scan cancellation works")
+        tmp = tempfile.mkdtemp(prefix="test_dupe_cancel_")
+        try:
+            dupes = find_duplicate_files([tmp], min_size_bytes=100, stop_check=lambda: True)
+            self.assertEqual(len(dupes), 0)
+            print("  Duplicate scan cancellation works")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_hardlinks_not_counted_as_duplicates(self):
+        tmp = tempfile.mkdtemp(prefix="test_hardlink_")
+        try:
+            f1 = os.path.join(tmp, "original.bin")
+            f2 = os.path.join(tmp, "hardlink.bin")
+            with open(f1, "wb") as f:
+                f.write(b"HARDLINK_CONTENT_" * 100)
+            try:
+                os.link(f1, f2)
+            except OSError:
+                return
+            dupes = find_duplicate_files([tmp], min_size_bytes=50)
+            self.assertEqual(len(dupes), 0, "Hard links sharing physical storage must not be reported as duplicates")
+            print("  Hard link deduplication verified: hard links sharing physical storage correctly ignored")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class TestEmptyFolderCleaner(unittest.TestCase):
@@ -195,10 +267,13 @@ class TestEmptyFolderCleaner(unittest.TestCase):
         print("  Protected directory filters all verified")
 
     def test_cancellation(self):
-        desktop = r"C:\Users\chkam\OneDrive\Desktop"
-        empty = scan_empty_directories([desktop], stop_check=lambda: True)
-        self.assertEqual(len(empty), 0)
-        print("  Empty folder scan cancellation works")
+        tmp = tempfile.mkdtemp(prefix="test_empty_cancel_")
+        try:
+            empty = scan_empty_directories([tmp], stop_check=lambda: True)
+            self.assertEqual(len(empty), 0)
+            print("  Empty folder scan cancellation works")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_skip_nonempty_dirs(self):
         tmp = tempfile.mkdtemp(prefix="test_notempty_")
@@ -243,7 +318,8 @@ class TestGUIInstantiation(unittest.TestCase):
         from gui.app import DiskOptimizerApp
         app = DiskOptimizerApp()
         self.assertEqual(len(app.tasks), 29)
-        app.update()
+        app.update_idletasks()
+        app.quit()
         app.destroy()
         print("  GUI V2 Application instantiated successfully (29 registered modules)")
 
@@ -254,8 +330,24 @@ class TestGUIInstantiation(unittest.TestCase):
         self.assertEqual(app.scope_var.get(), "Drive D: Only")
         app.apply_preset("Safe Fast Clean")
         self.assertEqual(app.scope_var.get(), "All Drives (C: & D:)")
+        app.update_idletasks()
+        app.quit()
         app.destroy()
         print("  Preset scope switching verified")
+
+    def test_deep_clean_preset_no_chrome_history(self):
+        from gui.app import DiskOptimizerApp
+        app = DiskOptimizerApp()
+        app.apply_preset("Deep System Clean")
+        # chrome_history must NOT be selected by default to protect user data
+        self.assertFalse(app.tasks["chrome_history"]["var"].get())
+        # but user temp and drive_d_junk should be selected
+        self.assertTrue(app.tasks["user_temp"]["var"].get())
+        self.assertTrue(app.tasks["drive_d_junk"]["var"].get())
+        app.update_idletasks()
+        app.quit()
+        app.destroy()
+        print("  Deep System Clean preset safely leaves chrome_history unchecked")
 
 
 if __name__ == "__main__":

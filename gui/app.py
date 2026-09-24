@@ -24,9 +24,22 @@ from engine.large_files import scan_large_files_multi
 from engine.duplicate_finder import find_duplicate_files
 from engine.empty_folder_cleaner import scan_empty_directories, delete_empty_directories
 
+# Ensure UTF-8 output across Windows consoles
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Set CustomTkinter Theme
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+ctk.deactivate_automatic_dpi_awareness()
 
 
 class DiskOptimizerApp(ctk.CTk):
@@ -38,9 +51,17 @@ class DiskOptimizerApp(ctk.CTk):
         super().__init__()
 
         self.title("Disk Optimizer Pro V2 - Kamran Ashraf")
-        self.geometry("1180x760")
-        self.minsize(1020, 680)
+        
+        # Adaptive geometry fitting both 720p laptops and 1080p+ desktops cleanly
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        app_w = min(1180, max(960, screen_w - 60))
+        app_h = min(780, max(580, screen_h - 80))
+        self.geometry(f"{app_w}x{app_h}")
+        self.minsize(min(960, app_w), min(580, app_h))
+
         self.configure(fg_color="#0b1120")
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Set App Icon if available
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -219,7 +240,21 @@ class DiskOptimizerApp(ctk.CTk):
             corner_radius=8,
             command=self.start_cleanup
         )
-        self.clean_btn.pack(side="left", padx=10, pady=8)
+        self.clean_btn.pack(side="left", padx=(10, 4), pady=8)
+
+        self.clean_stop_btn = ctk.CTkButton(
+            top_bar,
+            text="⏹️ Stop",
+            width=65,
+            height=38,
+            fg_color="#475569",
+            hover_color="#64748b",
+            state="disabled",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=8,
+            command=self.stop_cleanup_action
+        )
+        self.clean_stop_btn.pack(side="left", padx=(0, 8), pady=8)
 
         # Drive Scope Selector
         scope_lbl = ctk.CTkLabel(top_bar, text="Target Scope:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
@@ -534,9 +569,9 @@ class DiskOptimizerApp(ctk.CTk):
         self.large_tree.column("Size", width=110, anchor="center")
         self.large_tree.column("Name", width=250, anchor="w")
         self.large_tree.column("Path", width=580, anchor="w")
-        self.large_tree.bind("<Double-1>", lambda e: self.open_large_in_explorer())
+        self.large_tree.bind("<Double-1>", lambda e: self.open_large_in_explorer(silent_on_empty=True))
 
-        l_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.large_tree.yview)
+        l_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.large_tree.yview, style="Dark.Vertical.TScrollbar")
         self.large_tree.configure(yscrollcommand=l_scroll.set)
         self.large_tree.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         l_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
@@ -652,9 +687,9 @@ class DiskOptimizerApp(ctk.CTk):
         self.dupe_tree.column("Wasted", width=110, anchor="center")
         self.dupe_tree.column("Copies", width=70, anchor="center")
         self.dupe_tree.column("File", width=600, anchor="w")
-        self.dupe_tree.bind("<Double-1>", lambda e: self.open_dupe_in_explorer())
+        self.dupe_tree.bind("<Double-1>", lambda e: self.open_dupe_in_explorer(silent_on_empty=True))
 
-        d_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.dupe_tree.yview)
+        d_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.dupe_tree.yview, style="Dark.Vertical.TScrollbar")
         self.dupe_tree.configure(yscrollcommand=d_scroll.set)
         self.dupe_tree.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         d_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
@@ -750,9 +785,9 @@ class DiskOptimizerApp(ctk.CTk):
 
         self.empty_tree.column("Folder", width=220, anchor="w")
         self.empty_tree.column("Path", width=750, anchor="w")
-        self.empty_tree.bind("<Double-1>", lambda e: self.open_empty_in_explorer())
+        self.empty_tree.bind("<Double-1>", lambda e: self.open_empty_in_explorer(silent_on_empty=True))
 
-        e_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.empty_tree.yview)
+        e_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.empty_tree.yview, style="Dark.Vertical.TScrollbar")
         self.empty_tree.configure(yscrollcommand=e_scroll.set)
         self.empty_tree.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         e_scroll.pack(side="right", fill="y", padx=(0, 8), pady=8)
@@ -800,28 +835,40 @@ class DiskOptimizerApp(ctk.CTk):
             relief="flat"
         )
         style.map("Treeview", foreground=[("selected", "#ffffff")], background=[("selected", "#0284c7")])
+        style.configure(
+            "Dark.Vertical.TScrollbar",
+            background="#1e293b",
+            troughcolor="#090d16",
+            bordercolor="#131d31",
+            arrowcolor="#38bdf8",
+            relief="flat"
+        )
+        style.map(
+            "Dark.Vertical.TScrollbar",
+            background=[("active", "#334155"), ("disabled", "#0f172a")]
+        )
 
     # -----------------------------------------------------------------
     # TELEMETRY REFRESH
     # -----------------------------------------------------------------
 
     def refresh_all_disk_stats(self):
-        """Updates C: and D: drive telemetry in header"""
+        """Updates C: and D: drive telemetry in header (standard used-capacity meter)"""
         stats_map = get_all_drives_stats(["C:\\", "D:\\"])
 
         if "C:" in stats_map:
             c = stats_map["C:"]
-            self.c_label.configure(text=f"Drive C: {c['free_gb']} GB Free ({c['free_percent']}%)")
-            ratio = max(0.0, min(1.0, c["free_bytes"] / c["total_bytes"])) if c["total_bytes"] > 0 else 0
-            self.c_progress.set(ratio)
-            self.c_progress.configure(progress_color="#ef4444" if c["free_percent"] < 12 else "#10b981")
+            self.c_label.configure(text=f"Drive C: {c['free_gb']} GB Free ({c['used_percent']}% Used)")
+            used_ratio = max(0.0, min(1.0, c["used_bytes"] / c["total_bytes"])) if c["total_bytes"] > 0 else 0
+            self.c_progress.set(used_ratio)
+            self.c_progress.configure(progress_color="#ef4444" if c["used_percent"] >= 88 else "#10b981")
 
         if "D:" in stats_map:
             d = stats_map["D:"]
-            self.d_label.configure(text=f"Drive D: {d['free_gb']} GB Free ({d['free_percent']}%)")
-            ratio = max(0.0, min(1.0, d["free_bytes"] / d["total_bytes"])) if d["total_bytes"] > 0 else 0
-            self.d_progress.set(ratio)
-            self.d_progress.configure(progress_color="#ef4444" if d["free_percent"] < 12 else "#0284c7")
+            self.d_label.configure(text=f"Drive D: {d['free_gb']} GB Free ({d['used_percent']}% Used)")
+            used_ratio = max(0.0, min(1.0, d["used_bytes"] / d["total_bytes"])) if d["total_bytes"] > 0 else 0
+            self.d_progress.set(used_ratio)
+            self.d_progress.configure(progress_color="#ef4444" if d["used_percent"] >= 88 else "#0284c7")
 
         return stats_map
 
@@ -874,7 +921,7 @@ class DiskOptimizerApp(ctk.CTk):
                 "user_temp", "win_temp", "wer_reports", "thumb_cache",
                 "recent_items", "recycle_bin", "crash_dumps", "font_d3d_icon",
                 "drive_d_junk", "drive_d_pycache", "chrome_cache", "edge_cache",
-                "pip_cache", "dev_superpack", "chrome_history", "old_playwright",
+                "pip_cache", "dev_superpack", "old_playwright",
                 "old_opera", "mendeley_inst", "win_update", "shadow_storage",
                 "cleanmgr", "delivery_opt", "prefetch", "memory_dumps", "dns_flush",
                 "hibernation", "wsl_compact", "compact_os"
@@ -925,6 +972,21 @@ class DiskOptimizerApp(ctk.CTk):
                 self._log_after_id = self.after(50, self._process_log_queue)
             except Exception:
                 pass
+
+    def on_close(self):
+        if self.is_running or self.is_large_scanning or self.is_duplicate_scanning or self.is_empty_scanning:
+            confirm = messagebox.askyesno(
+                "Exit Confirmation",
+                "An optimization or scanning operation is currently running.\n\nAre you sure you want to stop operations and exit?",
+                icon="warning"
+            )
+            if not confirm:
+                return
+            self.engine.stop()
+            self.stop_large_scan = True
+            self.stop_dupe_scan = True
+            self.stop_empty_scan = True
+        self.destroy()
 
     def destroy(self):
         self._is_destroyed = True
@@ -997,7 +1059,9 @@ class DiskOptimizerApp(ctk.CTk):
 
         # Set UI running state
         self.is_running = True
+        self.engine.reset()
         self.clean_btn.configure(state="disabled", text="⏳ Cleaning...")
+        self.clean_stop_btn.configure(state="normal", fg_color="#7f1d1d", hover_color="#991b1b")
         self.status_text.configure(text="Executing optimization tasks...")
         self.progress_bar.set(0.02)
         self.cleaned_bytes_total = 0
@@ -1033,7 +1097,7 @@ class DiskOptimizerApp(ctk.CTk):
             "chrome_cache": self.engine.clean_chrome_caches if "C:" in drives else None,
             "edge_cache": self.engine.clean_edge_caches if "C:" in drives else None,
             "pip_cache": self.engine.clean_pip_cache if "C:" in drives else None,
-            "dev_superpack": self.engine.clean_developer_caches,
+            "dev_superpack": (lambda: self.engine.clean_developer_caches(drives)) if any(d in drives for d in ["C:", "D:"]) else None,
             "chrome_history": self.engine.clean_bloated_chrome_history if "C:" in drives else None,
             "old_playwright": self.engine.clean_old_playwright_versions if "C:" in drives else None,
             "old_opera": self.engine.clean_old_opera_versions if "C:" in drives else None,
@@ -1053,6 +1117,7 @@ class DiskOptimizerApp(ctk.CTk):
 
         for key in selected_keys:
             if self.engine.should_stop:
+                self._enqueue_log("Cleanup pipeline cancelled by user.", "warning")
                 break
             func = task_dispatch.get(key)
             if func:
@@ -1080,9 +1145,17 @@ class DiskOptimizerApp(ctk.CTk):
         else:
             self.recovered_label.configure(text=f"Freed: {mb} MB")
 
+    def stop_cleanup_action(self):
+        if self.is_running:
+            self.engine.stop()
+            self.clean_stop_btn.configure(state="disabled", text="Stopping...")
+            self.status_text.configure(text="Cancelling cleanup operations...")
+            self._enqueue_log("Cancellation requested. Stopping after current task finishes...", "warning")
+
     def _cleanup_completed(self):
         self.is_running = False
         self.clean_btn.configure(state="normal", text="🚀 1-CLICK CLEAN ALL")
+        self.clean_stop_btn.configure(state="disabled", text="⏹️ Stop", fg_color="#475569", hover_color="#64748b")
         self.progress_bar.set(1.0)
 
         # Refresh telemetry
@@ -1183,10 +1256,11 @@ class DiskOptimizerApp(ctk.CTk):
         self.large_stop_btn.configure(state="disabled", fg_color="#475569", hover_color="#64748b")
         self.large_status_lbl.configure(text=f"Error: {err}")
 
-    def open_large_in_explorer(self):
+    def open_large_in_explorer(self, silent_on_empty: bool = False):
         selected = self.large_tree.selection()
         if not selected:
-            messagebox.showinfo("Select File", "Please select a file first.")
+            if not silent_on_empty:
+                messagebox.showinfo("Select File", "Please select a file first.")
             return
         fp = self.large_tree.item(selected[0])["values"][3]
         if os.path.exists(fp):
@@ -1290,10 +1364,11 @@ class DiskOptimizerApp(ctk.CTk):
         self.dupe_stop_btn.configure(state="disabled", fg_color="#475569", hover_color="#64748b")
         self.dupe_status_lbl.configure(text=f"Error: {err}")
 
-    def open_dupe_in_explorer(self):
+    def open_dupe_in_explorer(self, silent_on_empty: bool = False):
         selected = self.dupe_tree.selection()
         if not selected:
-            messagebox.showinfo("Select File", "Please select a duplicate file first.")
+            if not silent_on_empty:
+                messagebox.showinfo("Select File", "Please select a duplicate file first.")
             return
         fp = self.dupe_tree.item(selected[0])["values"][4]
         if os.path.exists(fp):
@@ -1308,7 +1383,8 @@ class DiskOptimizerApp(ctk.CTk):
         gid = vals[0]
         fp = vals[4]
 
-        same_hash_count = sum(1 for item in self.dupe_tree.get_children() if self.dupe_tree.item(item)["values"][0] == gid)
+        same_hash_items = [item for item in self.dupe_tree.get_children() if self.dupe_tree.item(item)["values"][0] == gid]
+        same_hash_count = len(same_hash_items)
         if same_hash_count <= 1:
             confirm = messagebox.askyesno(
                 "Last Copy Warning",
@@ -1327,6 +1403,17 @@ class DiskOptimizerApp(ctk.CTk):
                     pass
                 os.remove(fp)
                 self.dupe_tree.delete(selected[0])
+
+                # Dynamically update remaining copies in the group
+                remaining_items = [item for item in self.dupe_tree.get_children() if self.dupe_tree.item(item)["values"][0] == gid]
+                new_count = len(remaining_items)
+                for item in remaining_items:
+                    curr_vals = list(self.dupe_tree.item(item)["values"])
+                    curr_vals[3] = new_count
+                    if new_count <= 1:
+                        curr_vals[2] = "0.0 MB"
+                    self.dupe_tree.item(item, values=curr_vals)
+
                 messagebox.showinfo("Deleted", "Duplicate copy removed successfully.")
                 self.refresh_all_disk_stats()
             except Exception as ex:
@@ -1387,10 +1474,11 @@ class DiskOptimizerApp(ctk.CTk):
         self.empty_stop_btn.configure(state="disabled", fg_color="#475569", hover_color="#64748b")
         self.empty_status_lbl.configure(text=f"Error: {err}")
 
-    def open_empty_in_explorer(self):
+    def open_empty_in_explorer(self, silent_on_empty: bool = False):
         selected = self.empty_tree.selection()
         if not selected:
-            messagebox.showinfo("Select Folder", "Please select a folder first.")
+            if not silent_on_empty:
+                messagebox.showinfo("Select Folder", "Please select a folder first.")
             return
         p = self.empty_tree.item(selected[0])["values"][1]
         if os.path.exists(p):

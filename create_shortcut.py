@@ -28,13 +28,16 @@ def create_desktop_shortcut():
     if not os.path.exists(pythonw):
         pythonw = sys.executable
 
+    def ps_quote(p: str) -> str:
+        return p.replace("'", "''")
+
     ps_script = f"""
     $WshShell = New-Object -ComObject WScript.Shell
-    $Shortcut = $WshShell.CreateShortcut('{shortcut_path}')
-    $Shortcut.TargetPath = '{pythonw}'
-    $Shortcut.Arguments = '"{launcher_pyw}"'
-    $Shortcut.WorkingDirectory = '{app_dir}'
-    $Shortcut.IconLocation = '{ico_path},0'
+    $Shortcut = $WshShell.CreateShortcut('{ps_quote(shortcut_path)}')
+    $Shortcut.TargetPath = '{ps_quote(pythonw)}'
+    $Shortcut.Arguments = '"{ps_quote(launcher_pyw)}"'
+    $Shortcut.WorkingDirectory = '{ps_quote(app_dir)}'
+    $Shortcut.IconLocation = '{ps_quote(ico_path)},0'
     $Shortcut.Description = 'Disk Optimizer Pro - 1-Click PC Cleanup & Optimization Suite'
     $Shortcut.Save()
     """
