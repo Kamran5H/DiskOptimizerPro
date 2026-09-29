@@ -1,31 +1,26 @@
-' Disk Optimizer Pro — Silent UAC-Elevated Launcher
+' Disk Optimizer Pro portable launcher
 Option Explicit
-Dim WshShell, fso, q, appDir, pyw, script, candidates, cand
+Dim WshShell, fso, q, appDir, pyw, script, portableExe
 q = Chr(34)
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
 appDir = fso.GetParentFolderName(WScript.ScriptFullName)
-If Not fso.FileExists(appDir & "\launcher.pyw") Then
-    candidates = Array( _
-        "C:\Users\chkam\OneDrive\Desktop\02_Projects & Development\DiskOptimizerPro", _
-        "C:\Users\chkam\OneDrive\Desktop\DiskOptimizerPro", _
-        "C:\Users\chkam\Desktop\02_Projects & Development\DiskOptimizerPro", _
-        "C:\Users\chkam\Desktop\DiskOptimizerPro" _
-    )
-    For Each cand In candidates
-        If fso.FileExists(cand & "\launcher.pyw") Then
-            appDir = cand
-            Exit For
-        End If
-    Next
+portableExe = appDir & "\DiskOptimizerPro.exe"
+WshShell.CurrentDirectory = appDir
+If fso.FileExists(portableExe) Then
+    WshShell.Run q & portableExe & q, 1, False
+    WScript.Quit
 End If
 
-Dim localAppData, pyFolder, subFolder
-WshShell.CurrentDirectory = appDir
 script = appDir & "\launcher.pyw"
+If Not fso.FileExists(script) Then
+    MsgBox "Disk Optimizer Pro files were not found next to this launcher.", vbExclamation, "Disk Optimizer Pro"
+    WScript.Quit 1
+End If
 
 ' Dynamically discover pythonw.exe
+Dim localAppData, pyFolder, subFolder
 pyw = ""
 localAppData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
 If fso.FolderExists(localAppData & "\Programs\Python") Then
@@ -38,13 +33,11 @@ If fso.FolderExists(localAppData & "\Programs\Python") Then
 End If
 
 If pyw = "" Or Not fso.FileExists(pyw) Then
-    If fso.FileExists("C:\Python314\pythonw.exe") Then
-        pyw = "C:\Python314\pythonw.exe"
-    ElseIf fso.FileExists("C:\Python312\pythonw.exe") Then
-        pyw = "C:\Python312\pythonw.exe"
-    Else
-        pyw = "pythonw.exe"
-    End If
+    pyw = "pythonw.exe"
 End If
 
+On Error Resume Next
 WshShell.Run q & pyw & q & " " & q & script & q, 0, False
+If Err.Number <> 0 Then
+    MsgBox "No Python runtime was found. Use the packaged DiskOptimizerPro.exe or install Python and the app requirements.", vbExclamation, "Disk Optimizer Pro"
+End If

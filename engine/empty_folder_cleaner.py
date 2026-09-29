@@ -12,6 +12,14 @@ SYSTEM_DIR_NAMES: set = {
 VCS_DIR_NAMES: set = {".git", ".svn", ".hg", ".bzr"}
 
 
+def _is_same_or_within(path: str, parent: str) -> bool:
+    """Compare normalized paths by components rather than string prefixes."""
+    try:
+        return os.path.commonpath((path, parent)) == parent
+    except ValueError:
+        return False
+
+
 def is_protected(path: str, base_root: str) -> bool:
     """
     Returns True when *path* must not be deleted.
@@ -35,7 +43,7 @@ def is_protected(path: str, base_root: str) -> bool:
     sys_root = os.path.normpath(
         os.environ.get("SystemRoot", r"C:\Windows")
     ).lower()
-    if norm_path == sys_root or norm_path.startswith(sys_root + os.sep):
+    if _is_same_or_within(norm_path, sys_root):
         return True
 
     # Program Files
@@ -45,9 +53,9 @@ def is_protected(path: str, base_root: str) -> bool:
     prog_files_x86 = os.path.normpath(
         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     ).lower()
-    if norm_path == prog_files or norm_path.startswith(prog_files + os.sep):
+    if _is_same_or_within(norm_path, prog_files):
         return True
-    if prog_files_x86 and (norm_path == prog_files_x86 or norm_path.startswith(prog_files_x86 + os.sep)):
+    if prog_files_x86 and _is_same_or_within(norm_path, prog_files_x86):
         return True
 
     parts = set(norm_path.split(os.sep))
@@ -64,7 +72,7 @@ def is_protected(path: str, base_root: str) -> bool:
     user_temp = os.environ.get("TEMP", "")
     if "appdata" in parts:
         norm_temp = os.path.normpath(user_temp).lower() if user_temp else ""
-        if not (norm_temp and norm_path.startswith(norm_temp)):
+        if not (norm_temp and norm_path != norm_temp and _is_same_or_within(norm_path, norm_temp)):
             return True
 
     return False
@@ -140,7 +148,10 @@ def delete_empty_directories(
     for p in sorted_paths:
         try:
             # Double-check it is still empty and not a symlink
-            if os.path.islink(p):
+            if os.path.islink(p) or (hasattr(os.path, "isjunction") and os.path.isjunction(p)):
+                fail += 1
+                continue
+            if is_protected(p, os.path.dirname(os.path.abspath(p))):
                 fail += 1
                 continue
             if os.path.isdir(p) and not os.listdir(p):

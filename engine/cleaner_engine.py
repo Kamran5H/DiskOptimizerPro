@@ -7,6 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from engine.system_ops import (
     get_disk_stats,
     get_all_drives_stats,
+    get_system_drive,
     run_powershell,
     is_process_running_fast,
     disable_hibernation,
@@ -263,12 +264,20 @@ class CleanerEngine:
         """1.7 - Empty Windows Recycle Bin across specified drives"""
         drives_str = ", ".join(target_drives) if target_drives else "All Drives"
         self.log(f"Emptying Recycle Bin ({drives_str})...", "step")
-        if target_drives and len(target_drives) == 1:
-            letter = target_drives[0].replace(":", "").replace("\\", "").strip().upper()
-            cmd = f"Clear-RecycleBin -DriveLetter {letter} -Force -ErrorAction SilentlyContinue"
+        if target_drives:
+            for drive in target_drives:
+                letter = drive.replace(":", "").replace("\\", "").strip().upper()
+                run_powershell(
+                    f"Clear-RecycleBin -DriveLetter {letter} -Force -ErrorAction SilentlyContinue",
+                    self.log_cb,
+                    timeout=30
+                )
         else:
-            cmd = "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"
-        run_powershell(cmd, self.log_cb, timeout=30)
+            run_powershell(
+                "Clear-RecycleBin -Force -ErrorAction SilentlyContinue",
+                self.log_cb,
+                timeout=30
+            )
         self.log(f"[OK] Recycle Bin emptied ({drives_str})", "success")
         return 0
 
@@ -314,18 +323,26 @@ class CleanerEngine:
     # DRIVE D: DEDICATED CLEANERS
     # -----------------------------------------------------------------
 
-    def clean_drive_d_root_junk(self) -> int:
+    def clean_drive_d_root_junk(self, drive: str = "D:") -> int:
         """
         Cleans Visual C++ installer leftovers and crash temp files in D:\\ root:
         eula.*.txt, install.exe, install.ini, install.res.*.dll, vcredist.bmp,
         VC_RED.cab, VC_RED.MSI, globdata.ini, DumpStack.log.tmp
         """
-        d_root = "D:\\"
-        if not os.path.isdir(d_root):
-            self.log("Drive D: not found (Skipped).", "info")
+        drive_letter, drive_tail = os.path.splitdrive(drive)
+        drive_label = drive_letter.upper()
+        if (
+            not re.fullmatch(r"[A-Z]:", drive_label)
+            or drive_tail not in ("", "\\", "/")
+        ):
+            self.log(f"Invalid drive root for installer cleanup: {drive!r}.", "warning")
+            return 0
+        drive_root = drive_label + "\\"
+        if not os.path.isdir(drive_root):
+            self.log(f"Drive {drive_label or drive} not found (Skipped).", "info")
             return 0
 
-        self.log("Scanning Drive D: root for installer leftovers...", "step")
+        self.log(f"Scanning {drive_label} root for installer leftovers...", "step")
         junk_prefixes = ("eula.", "install.res.", "vc_red.")
         exact_junk = {
             "install.exe", "install.ini", "vcredist.bmp", "vc_red.cab",
@@ -335,14 +352,14 @@ class CleanerEngine:
         freed = 0
         deleted_count = 0
         try:
-            for item in os.listdir(d_root):
+            for item in os.listdir(drive_root):
                 item_lower = item.lower()
                 is_junk = (
                     item_lower in exact_junk or
                     any(item_lower.startswith(pref) for pref in junk_prefixes)
                 )
                 if is_junk:
-                    full_p = os.path.join(d_root, item)
+                    full_p = os.path.join(drive_root, item)
                     if os.path.isfile(full_p) and not os.path.islink(full_p):
                         try:
                             sz = os.path.getsize(full_p)
@@ -350,28 +367,37 @@ class CleanerEngine:
                             os.remove(full_p)
                             freed += sz
                             deleted_count += 1
-                            self.log(f"  Removed D: root junk: {item}", "info")
+                            self.log(f"  Removed {drive_label} root junk: {item}", "info")
                         except Exception:
                             pass
         except Exception as ex:
-            self.log(f"Drive D: scan note: {ex}", "warning")
+            self.log(f"{drive_label} scan note: {ex}", "warning")
 
-        self.log(f"[OK] Drive D: root cleaned ({deleted_count} files, ~{round(freed/(1024*1024),2)} MB freed)", "success")
+        self.log(f"[OK] {drive_label} root cleaned ({deleted_count} files, ~{round(freed/(1024*1024),2)} MB freed)", "success")
         return freed
 
-    def clean_drive_d_python_caches(self) -> int:
-        """Cleans __pycache__ and .pytest_cache directories across Drive D:\\"""
-        d_root = "D:\\"
-        if not os.path.isdir(d_root):
+    def clean_drive_d_python_caches(self, drive: str = "D:") -> int:
+        """Cleans __pycache__ and .pytest_cache directories on one non-system drive."""
+        drive_letter, drive_tail = os.path.splitdrive(drive)
+        drive_label = drive_letter.upper()
+        if (
+            not re.fullmatch(r"[A-Z]:", drive_label)
+            or drive_tail not in ("", "\\", "/")
+        ):
+            self.log(f"Invalid drive root for developer cache cleanup: {drive!r}.", "warning")
+            return 0
+        drive_root = drive_label + "\\"
+        if drive_label == get_system_drive() or not os.path.isdir(drive_root):
+            self.log(f"Developer cache sweep skipped on system or unavailable drive {drive_label}.", "info")
             return 0
 
-        self.log("Sweeping Drive D: for __pycache__ and .pytest_cache folders...", "step")
+        self.log(f"Sweeping {drive_label} for __pycache__ and .pytest_cache folders...", "step")
         freed = 0
         folder_count = 0
         skip_dirs = {"$recycle.bin", "system volume information", "recovery"}
         target_cache_names = {"__pycache__", ".pytest_cache"}
 
-        for root, dirs, _ in os.walk(d_root, topdown=True, followlinks=False):
+        for root, dirs, _ in os.walk(drive_root, topdown=True, followlinks=False):
             if self._check_cancel():
                 break
             dirs[:] = [
@@ -379,7 +405,7 @@ class CleanerEngine:
                 if d.lower() not in skip_dirs and not d.startswith("$")
             ]
             for d in list(dirs):
-                if d in target_cache_names:
+                if d.lower() in target_cache_names:
                     target_p = os.path.join(root, d)
                     try:
                         sz = measure_path_size(target_p)
@@ -390,7 +416,7 @@ class CleanerEngine:
                     except Exception:
                         pass
 
-        self.log(f"[OK] Drive D: developer caches cleaned ({folder_count} folders, ~{round(freed/(1024*1024),2)} MB freed)", "success")
+        self.log(f"[OK] {drive_label} developer caches cleaned ({folder_count} folders, ~{round(freed/(1024*1024),2)} MB freed)", "success")
         return freed
 
     # -----------------------------------------------------------------
@@ -640,8 +666,8 @@ class CleanerEngine:
 
     def clean_developer_caches(self, target_drives: Optional[List[str]] = None) -> int:
         """Cleans NPM Cache, VS Code / Cursor caches, and Yarn cache."""
-        if target_drives and "C:" not in target_drives:
-            self.log("Developer caches located on Drive C: (Skipped due to Target Scope).", "info")
+        if target_drives and get_system_drive() not in target_drives:
+            self.log("Developer caches are on the system drive (Skipped due to Target Scope).", "info")
             return 0
 
         self.log("Cleaning developer caches (NPM, VS Code, Cursor, Yarn)...", "step")
