@@ -4,6 +4,7 @@ import sys
 import unittest
 import tempfile
 import shutil
+from unittest.mock import patch
 
 # Add root project path
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,7 +12,8 @@ if base_dir not in sys.path:
     sys.path.insert(0, base_dir)
 
 from engine.system_ops import (
-    get_disk_stats, get_all_drives_stats, is_admin, is_process_running_fast
+    get_disk_stats, get_all_drives_stats, get_all_detected_drives,
+    get_memory_stats, get_system_drive, is_admin, is_process_running_fast
 )
 from engine.cleaner_engine import (
     CleanerEngine, delete_folder_contents, safe_rmtree, measure_path_size
@@ -44,6 +46,23 @@ class TestSystemOps(unittest.TestCase):
         self.assertIsInstance(result, bool)
         print(f"  Admin privileges: {result}")
 
+    def test_detected_drives_are_local_and_well_formed(self):
+        drives = get_all_detected_drives()
+        self.assertIn(get_system_drive() + "\\", drives)
+        self.assertTrue(all(drive.endswith("\\") for drive in drives))
+        self.assertTrue(all(os.path.exists(drive) for drive in drives))
+        self.assertRegex(get_system_drive(), r"^[A-Z]:$")
+        print(f"  Detected local drives dynamically: {drives}")
+
+    def test_memory_stats_shape(self):
+        stats = get_memory_stats()
+        if stats is not None:
+            self.assertGreater(stats["total_bytes"], 0)
+            self.assertGreaterEqual(stats["available_bytes"], 0)
+            self.assertGreaterEqual(stats["used_percent"], 0)
+            self.assertLessEqual(stats["used_percent"], 100)
+        print("  Physical memory telemetry is available or reports unavailable cleanly")
+
     def test_disk_stats_nonexistent_drive(self):
         stats = get_disk_stats("Z:\\")
         self.assertFalse(stats["exists"])
@@ -66,6 +85,12 @@ class TestCleanerEngine(unittest.TestCase):
         engine = CleanerEngine()
         self.assertIsNotNone(engine)
         self.assertFalse(engine.should_stop)
+
+    def test_drive_cache_cleaner_rejects_non_root_input(self):
+        logs = []
+        engine = CleanerEngine(log_cb=lambda msg, level: logs.append((msg, level)))
+        self.assertEqual(engine.clean_drive_d_python_caches(""), 0)
+        self.assertTrue(any(level == "warning" for _, level in logs))
 
     def test_cancel_and_reset(self):
         engine = CleanerEngine()
@@ -140,6 +165,21 @@ class TestCleanerEngine(unittest.TestCase):
 
 class TestLargeFiles(unittest.TestCase):
 
+    def test_zero_result_limit_and_invalid_scan_options(self):
+        tmp = tempfile.mkdtemp(prefix="test_lf_limits_")
+        try:
+            with open(os.path.join(tmp, "large.bin"), "wb") as f:
+                f.write(b"X" * 16)
+            self.assertEqual(scan_large_files_multi([tmp], min_size_mb=0, top_n=0), [])
+            for top_n in (-1, 1.5, True):
+                with self.subTest(top_n=top_n), self.assertRaises(ValueError):
+                    scan_large_files_multi([tmp], top_n=top_n)
+            for threshold in (-1, float("inf"), float("nan")):
+                with self.subTest(threshold=threshold), self.assertRaises(ValueError):
+                    scan_large_files_multi([tmp], min_size_mb=threshold)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_large_files_multi_scan(self):
         tmp = tempfile.mkdtemp(prefix="test_lf_")
         try:
@@ -184,6 +224,14 @@ class TestLargeFiles(unittest.TestCase):
 
 
 class TestDuplicateFinder(unittest.TestCase):
+
+    def test_invalid_result_limits(self):
+        for max_results in (-1, 1.5, True):
+            with self.subTest(max_results=max_results), self.assertRaises(ValueError):
+                find_duplicate_files([], max_results=max_results)
+        for min_size_bytes in (-1, 1.5, True):
+            with self.subTest(min_size_bytes=min_size_bytes), self.assertRaises(ValueError):
+                find_duplicate_files([], min_size_bytes=min_size_bytes)
 
     def test_finds_exact_duplicates(self):
         tmp = tempfile.mkdtemp(prefix="test_dupe_")
@@ -241,6 +289,29 @@ class TestDuplicateFinder(unittest.TestCase):
 
 
 class TestEmptyFolderCleaner(unittest.TestCase):
+
+    def test_temp_path_boundary_is_component_aware(self):
+        with patch.dict(os.environ, {"TEMP": r"C:\Users\test\AppData\Local\Temp"}):
+            self.assertFalse(is_protected(
+                r"C:\Users\test\AppData\Local\Temp\cache", r"C:\Users\test"
+            ))
+            self.assertTrue(is_protected(
+                r"C:\Users\test\AppData\Local\TemporaryFiles", r"C:\Users\test"
+            ))
+            self.assertTrue(is_protected(
+                r"C:\Users\test\AppData\Local\Temp", r"C:\Users\test"
+            ))
+
+    def test_delete_empty_directories_rechecks_protected_path(self):
+        tmp = tempfile.mkdtemp(prefix="test_empty_protected_")
+        protected = os.path.join(tmp, ".git", "empty")
+        try:
+            os.makedirs(protected)
+            success, fail = delete_empty_directories([protected])
+            self.assertEqual((success, fail), (0, 1))
+            self.assertTrue(os.path.isdir(protected))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_finds_and_deletes_empty_dirs(self):
         tmp = tempfile.mkdtemp(prefix="test_empty_")
@@ -317,37 +388,39 @@ class TestGUIInstantiation(unittest.TestCase):
     def test_gui_v2_instantiation(self):
         from gui.app import DiskOptimizerApp
         app = DiskOptimizerApp()
-        self.assertEqual(len(app.tasks), 29)
+        self.assertEqual(len(app.tasks), 14)
         app.update_idletasks()
         app.quit()
         app.destroy()
-        print("  GUI V2 Application instantiated successfully (29 registered modules)")
+        print("  GUI instantiated with 14 concise cleanup choices")
 
     def test_preset_scope_switching(self):
         from gui.app import DiskOptimizerApp
         app = DiskOptimizerApp()
-        app.apply_preset("Drive D: Clean")
-        self.assertEqual(app.scope_var.get(), "Drive D: Only")
-        app.apply_preset("Safe Fast Clean")
-        self.assertEqual(app.scope_var.get(), "All Drives (C: & D:)")
+        app.apply_preset("Recommended Cleanup")
+        self.assertEqual(app.scope_var.get(), app.all_scope_label)
+        self.assertEqual(
+            {key for key, task in app.tasks.items() if task["var"].get()},
+            {"user_temp", "win_temp", "thumb_cache"}
+        )
         app.update_idletasks()
         app.quit()
         app.destroy()
-        print("  Preset scope switching verified")
+        print("  Recommended preset selects only three rebuildable temporary areas")
 
-    def test_deep_clean_preset_no_chrome_history(self):
+    def test_optional_preset_preserves_personal_and_diagnostic_data(self):
         from gui.app import DiskOptimizerApp
         app = DiskOptimizerApp()
-        app.apply_preset("Deep System Clean")
-        # chrome_history must NOT be selected by default to protect user data
-        self.assertFalse(app.tasks["chrome_history"]["var"].get())
-        # but user temp and drive_d_junk should be selected
-        self.assertTrue(app.tasks["user_temp"]["var"].get())
-        self.assertTrue(app.tasks["drive_d_junk"]["var"].get())
+        app.apply_preset("All Optional Caches")
+        self.assertFalse(app.tasks["recycle_bin"]["var"].get())
+        self.assertFalse(app.tasks["memory_dumps"]["var"].get())
+        self.assertFalse(app.tasks["crash_dumps"]["var"].get())
+        self.assertFalse(app.tasks["user_temp"]["var"].get())
+        self.assertTrue(app.tasks["chrome_cache"]["var"].get())
         app.update_idletasks()
         app.quit()
         app.destroy()
-        print("  Deep System Clean preset safely leaves chrome_history unchecked")
+        print("  Optional cache preset leaves personal and diagnostic data untouched")
 
 
 if __name__ == "__main__":

@@ -1,128 +1,57 @@
-# 🚀 Disk Optimizer Pro V2
+# Disk Optimizer Pro
 
-<div align="center">
+A small Windows 10/11 desktop utility for reviewing local drive space, checking physical memory use, and clearing selected temporary files. It discovers drives on the current computer instead of assuming that a `D:` drive exists.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Kamran5H/DiskOptimizerPro)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://github.com/Kamran5H/DiskOptimizerPro)
-[![GUI](https://img.shields.io/badge/GUI-CustomTkinter%20Modern%20Dark-6366F1?style=for-the-badge)](https://github.com/Kamran5H/DiskOptimizerPro)
-[![Safety](https://img.shields.io/badge/Safety-Kernel--Safe%20%7C%20Zero--Destruction-10B981?style=for-the-badge)](https://github.com/Kamran5H/DiskOptimizerPro)
+## What it does
 
-**Executive dual-drive (C: & D:) Windows system cleanup, duplicate hunter, and disk optimization suite with a modern CustomTkinter GUI.**
+- Shows free space for the system drive and another available local drive, plus physical RAM usage.
+- Opens Windows Task Manager so you can identify memory-heavy apps. The app does not force-close apps or use unsafe “RAM cleaner” tricks.
+- Starts with three low-risk choices: this user's temp files, Windows temp files, and rebuildable thumbnail cache. Each run presents a review prompt.
+- Keeps browser, developer, update, diagnostic, Recycle Bin, and other-drive cleanup optional. Browser history, saved passwords, and personal documents are not cleanup targets.
+- Includes optional large-file, duplicate-file, and empty-folder scans. Scans default to a limited user/system location; choose another detected drive when needed.
 
-[Features](#-features) • [Architecture](#-architecture) • [Safety Protocol](#-safety--whitelist-protocols) • [Installation](#-installation) • [License](#-license)
+System-level cleanup can be limited by Windows permissions. The app runs normally without administrator rights; use the explicit elevation control only when a selected action requires it. Avoid removing diagnostic dumps if you need them to investigate a crash. Deleting the Recycle Bin is permanent.
 
-</div>
+## Run from source
 
----
+Requirements: Windows 10/11 and Python 3.10 or newer.
 
-## 🌟 Executive Overview
-
-**Disk Optimizer Pro V2** is a native Windows system optimization and disk hygiene suite built in Python with **CustomTkinter**. Designed specifically for power workstations with dual-drive configurations (System SSD `C:` and Secondary Storage `D:`), it provides a military-grade cleanup engine that safely reclaims tens of gigabytes of disk space while rigorously safeguarding essential operating system components, developer toolchains, and user credentials.
-
----
-
-## 🚀 Features
-
-- **💽 Dual-Drive Telemetry**: Real-time visual disk meter displaying capacity, used storage, and free space on both `C:` and `D:` partitions simultaneously.
-- **🧹 Deep System Hygiene (`cleaner_engine.py`)**:
-  - Windows Update residual files & Delivery Optimization caches
-  - Crash dumps, error reports, and diagnostic memory snapshots
-  - Temp directories (`%TEMP%`, `C:\Windows\Temp`)
-  - Web browser caches (Chrome, Edge, Brave, Firefox)
-  - Package manager caches (`pip`, `npm`, `yarn`, `cargo`)
-- **👯 High-Speed Duplicate Hunter (`duplicate_finder.py`)**: Multi-threaded duplicate detection combining file size pre-filtering with chunked cryptographic hashing (SHA256) to identify redundant files without reading full disk contents into RAM.
-- **📂 Recursive Empty Directory Pruner (`empty_folder_cleaner.py`)**: Safely purges abandoned, empty folder trees left behind by uninstalled software.
-- **📊 Large File Space Analyzer (`large_files.py`)**: Scans and sorts files exceeding configurable size thresholds (e.g. >100MB / >1GB) for immediate manual review.
-- **🎨 Modern CustomTkinter Dark Theme**: Sleek, high-contrast dark GUI with responsive progress animations, scan statistics, and selective confirmation toggles.
-
----
-
-## 🛡️ Safety & Whitelist Protocols
-
-Disk Optimizer Pro enforces non-negotiable safety guardrails to ensure system stability:
-- **Zero OS Destruction**: System-critical directories (`System32`, `WinSxS`, `Boot`, driver stores) are permanently hardcoded into immutable exclusion lists.
-- **Developer Safety**: Preserves active Git repositories (`.git/`), IDE settings (`.vscode`, `.idea`), and active virtual environments.
-- **Lock Detection**: Skips files actively locked by running Windows processes without crashing.
-- **Recycle Bin Routing**: Optional safe-delete mode moves files to the Windows Recycle Bin rather than permanently unlinking them.
-
----
-
-## 🏗️ Architecture
-
-```mermaid
-flowchart TD
-    A[CustomTkinter GUI Bridge: gui/] --> B[System Telemetry: system_ops.py]
-    B --> C{Optimization Engine}
-    
-    subgraph Core Modules [engine/]
-        C --> D[cleaner_engine.py: Temp / Logs / Caches]
-        C --> E[duplicate_finder.py: SHA256 Chunked Hashing]
-        C --> F[empty_folder_cleaner.py: Recursive Tree Pruner]
-        C --> G[large_files.py: Space Hog Inspector]
-    end
-    
-    Core Modules --> H[Safety Validator & Whitelist Filter]
-    H --> I{Execute Action}
-    I -->|Safe Deletion| J[(Recycle Bin / Reclaimed Space)]
-```
-
----
-
-## 📁 Repository Structure
-
-```text
-DiskOptimizerPro/
-├── main.py                     # Primary GUI application entry point
-├── launcher.pyw                # Windowless background launcher
-├── launch_disk_optimizer.vbs   # Silent native VBS launcher
-├── create_shortcut.py          # Desktop shortcut installer script
-├── engine/                     # Core backend execution modules
-│   ├── cleaner_engine.py       # Temporary files, caches, and logs cleanup logic
-│   ├── duplicate_finder.py     # Fast cryptographic duplicate file detector
-│   ├── empty_folder_cleaner.py # Tree-walking empty folder pruner
-│   ├── large_files.py          # Heavy storage consumer scanner
-│   └── system_ops.py           # Drive space calculation & Windows shell APIs
-├── gui/                        # CustomTkinter interface components & styling
-├── assets/                     # Icons, logos, and UI graphics
-├── tests/                      # Automated safety and engine test suites
-├── .gitignore                  # Python & Windows build artifact exclusions
-└── LICENSE                     # Open-source MIT License
-```
-
----
-
-## ⚡ Installation
-
-### Prerequisites
-- Windows 10 or 11
-- Python 3.10 or higher
-
-### Setup
-```bash
-git clone https://github.com/Kamran5H/DiskOptimizerPro.git
-cd DiskOptimizerPro
-
-# Setup virtual environment
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
-
-# Install requirements
-pip install customtkinter psutil send2trash
-```
-
-### Launch
-```bash
-# Launch interactive GUI
+python -m pip install -r requirements.txt
 python main.py
-
-# Or create a Desktop Shortcut:
-python create_shortcut.py
 ```
 
----
+The included `launch_disk_optimizer.vbs` can launch the source version without a console window. A Python runtime and the requirements must be installed for this source-based option.
 
-## 📜 License
+## Make a portable ZIP for another PC
 
-This project is open-source and released under the [MIT License](LICENSE).  
-Copyright (c) 2024-2026 **Kamran Ashraf**.
+On a Windows build computer, run:
+
+```text
+build_portable.bat
+```
+
+The script creates `dist\DiskOptimizerPro`. Zip the **entire folder**, including the executable and its companion files, and extract that folder on the receiving Windows 10/11 PC. Launch `DiskOptimizerPro.exe` (or the included VBS launcher). The receiving PC does not need Python or a separate dependency installation. Build the package on Windows for Windows; do not copy only the `.exe`.
+
+The app detects drives, Windows folders, and the signed-in user's profile on the receiving PC at runtime. It does not rely on the developer's drive layout or account paths.
+
+## Tests
+
+Run the unit tests on Windows with the app dependencies installed:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+## Project layout
+
+- `gui/` — CustomTkinter user interface
+- `engine/` — Windows telemetry, safe cleanup helpers, and file scanners
+- `tests/` — unit and GUI-instantiation tests
+- `build_portable.bat` — self-contained Windows folder-package build
+
+## License
+
+MIT. See [LICENSE](LICENSE).

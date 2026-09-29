@@ -52,6 +52,11 @@ def find_duplicate_files(
         }
     ]
     """
+    if isinstance(min_size_bytes, bool) or not isinstance(min_size_bytes, int) or min_size_bytes < 0:
+        raise ValueError("min_size_bytes must be a non-negative integer")
+    if isinstance(max_results, bool) or not isinstance(max_results, int) or max_results < 0:
+        raise ValueError("max_results must be a non-negative integer")
+
     skip_dirs = {
         "$recycle.bin", "system volume information", "recovery", "windows",
         "program files", "program files (x86)", "appdata"

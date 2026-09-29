@@ -13,6 +13,9 @@ from engine.system_ops import (
     is_admin,
     get_disk_stats,
     get_all_drives_stats,
+    get_all_detected_drives,
+    get_memory_stats,
+    get_system_drive,
     run_powershell
 )
 from engine.cleaner_engine import (
@@ -44,21 +47,20 @@ ctk.deactivate_automatic_dpi_awareness()
 
 class DiskOptimizerApp(ctk.CTk):
     """
-    Disk Optimizer Pro V2 - Kamran Ashraf
-    Executive Dual-Drive (C: & D:) PC Optimization & Cleanup Suite
+    Laptop-friendly Windows storage and memory overview with guarded cleanup tools.
     """
     def __init__(self):
         super().__init__()
 
-        self.title("Disk Optimizer Pro V2 - Kamran Ashraf")
+        self.title("Disk Optimizer Pro")
         
         # Adaptive geometry fitting both 720p laptops and 1080p+ desktops cleanly
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        app_w = min(1180, max(960, screen_w - 60))
-        app_h = min(780, max(580, screen_h - 80))
+        app_w = min(1240, max(900, screen_w - 40))
+        app_h = min(820, max(560, screen_h - 60))
         self.geometry(f"{app_w}x{app_h}")
-        self.minsize(min(960, app_w), min(580, app_h))
+        self.minsize(min(900, app_w), min(560, app_h))
 
         self.configure(fg_color="#0b1120")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -73,10 +75,21 @@ class DiskOptimizerApp(ctk.CTk):
                 pass
 
         # Execution State
+        self.available_drives = get_all_detected_drives()
+        self.system_drive = get_system_drive()
+        if self.system_drive + "\\" not in self.available_drives:
+            self.available_drives.insert(0, self.system_drive + "\\")
+        self.all_scope_label = "All available drives"
+        self.drive_scope_map = {self.all_scope_label: list(self.available_drives)}
+        for drive in self.available_drives:
+            label = f"Drive {drive[:2]} only"
+            self.drive_scope_map[label] = [drive[:2]]
+
         self.is_running = False
         self.log_queue = queue.Queue()
         self.engine = CleanerEngine(log_cb=self._enqueue_log)
         self.cleaned_bytes_total = 0
+        self.cleanup_errors = []
         self.initial_free_map = {}
 
         # Scanner states
@@ -100,7 +113,7 @@ class DiskOptimizerApp(ctk.CTk):
     # -----------------------------------------------------------------
 
     def _build_header(self):
-        """Header with App Title, Admin Badge, and Dual-Drive Telemetry (C: & D:)"""
+        """Header with current drive and physical memory telemetry."""
         self.header_frame = ctk.CTkFrame(self, fg_color="#131d31", corner_radius=12)
         self.header_frame.pack(fill="x", padx=16, pady=(12, 6))
 
@@ -110,7 +123,7 @@ class DiskOptimizerApp(ctk.CTk):
 
         app_title = ctk.CTkLabel(
             title_box,
-            text="⚡ DISK OPTIMIZER PRO V2",
+            text="DISK OPTIMIZER PRO",
             font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
             text_color="#38bdf8"
         )
@@ -118,11 +131,21 @@ class DiskOptimizerApp(ctk.CTk):
 
         sub_lbl = ctk.CTkLabel(
             title_box,
-            text="Executive Dual-Drive (C: & D:) PC Optimization Suite • Kamran Ashraf",
+            text="A calm overview of storage and memory on this PC",
             font=ctk.CTkFont(family="Segoe UI", size=11),
             text_color="#94a3b8"
         )
         sub_lbl.pack(anchor="w")
+
+        developer_badge = ctk.CTkLabel(
+            title_box,
+            text="Developer: Kamran Ashraf",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#f4d06f",
+            fg_color="#342b16",
+            corner_radius=6
+        )
+        developer_badge.pack(anchor="w", pady=(5, 0), padx=0, ipadx=7, ipady=2)
 
         # Admin Badge
         has_admin = is_admin()
@@ -143,48 +166,42 @@ class DiskOptimizerApp(ctk.CTk):
         )
         self.admin_btn.pack(side="left", padx=12, pady=10)
 
-        # Drive Telemetry Right Container
+        # Drive and memory telemetry
         telemetry_box = ctk.CTkFrame(self.header_frame, fg_color="transparent")
         telemetry_box.pack(side="right", padx=14, pady=8)
+        self.drive_cards_frame = ctk.CTkFrame(telemetry_box, fg_color="transparent")
+        self.drive_cards_frame.pack(side="left")
+        self.drive_cards = {}
 
-        # Drive C: Card
-        self.c_card = ctk.CTkFrame(telemetry_box, fg_color="#1e293b", corner_radius=8)
-        self.c_card.pack(side="left", padx=6, pady=2)
-
-        self.c_label = ctk.CTkLabel(
-            self.c_card,
-            text="Drive C: -- GB Free (0%)",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+        self.memory_card = ctk.CTkFrame(telemetry_box, fg_color="#1e293b", corner_radius=8)
+        self.memory_card.pack(side="left", padx=6, pady=2)
+        self.memory_label = ctk.CTkLabel(
+            self.memory_card,
+            text="RAM: checking...",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
             text_color="#f8fafc"
         )
-        self.c_label.pack(padx=10, pady=(4, 2))
-
-        self.c_progress = ctk.CTkProgressBar(self.c_card, width=150, height=6, corner_radius=3)
-        self.c_progress.set(0.1)
-        self.c_progress.pack(padx=10, pady=(0, 6))
-
-        # Drive D: Card
-        self.d_card = ctk.CTkFrame(telemetry_box, fg_color="#1e293b", corner_radius=8)
-        self.d_card.pack(side="left", padx=6, pady=2)
-
-        self.d_label = ctk.CTkLabel(
-            self.d_card,
-            text="Drive D: -- GB Free (0%)",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#f8fafc"
-        )
-        self.d_label.pack(padx=10, pady=(4, 2))
-
-        self.d_progress = ctk.CTkProgressBar(self.d_card, width=150, height=6, corner_radius=3)
-        self.d_progress.set(0.25)
-        self.d_progress.pack(padx=10, pady=(0, 6))
+        self.memory_label.pack(padx=8, pady=(5, 2))
+        self.memory_progress = ctk.CTkProgressBar(self.memory_card, width=132, height=6, corner_radius=3)
+        self.memory_progress.set(0)
+        self.memory_progress.pack(padx=8, pady=(0, 2))
+        ctk.CTkButton(
+            self.memory_card,
+            text="Open Task Manager",
+            width=122,
+            height=21,
+            fg_color="transparent",
+            hover_color="#334155",
+            font=ctk.CTkFont(family="Segoe UI", size=9),
+            command=self.open_task_manager
+        ).pack(padx=4, pady=(0, 4))
 
         # Refresh Telemetry Button
         self.refresh_btn = ctk.CTkButton(
             telemetry_box,
-            text="🔄",
+            text="Refresh",
             width=32,
-            height=32,
+            height=28,
             fg_color="#1e293b",
             hover_color="#334155",
             font=ctk.CTkFont(size=13),
@@ -197,7 +214,7 @@ class DiskOptimizerApp(ctk.CTk):
     # -----------------------------------------------------------------
 
     def _build_tabview(self):
-        """Creates the 4 tabs: 1-Click Optimizer, Large Files, Duplicate Finder, Empty Folders"""
+        """Creates a concise cleanup dashboard and optional file-finding tools."""
         self.tabview = ctk.CTkTabview(
             self,
             fg_color="#0f172a",
@@ -208,7 +225,7 @@ class DiskOptimizerApp(ctk.CTk):
         )
         self.tabview.pack(fill="both", expand=True, padx=16, pady=(0, 10))
 
-        self.tab_optimizer = self.tabview.add("🚀 1-Click Optimizer")
+        self.tab_optimizer = self.tabview.add("Recommended cleanup")
         self.tab_large = self.tabview.add("🔍 Large Files Finder")
         self.tab_dupes = self.tabview.add("👥 Duplicate Files Finder")
         self.tab_empty = self.tabview.add("🧹 Empty Folders Cleaner")
@@ -229,10 +246,10 @@ class DiskOptimizerApp(ctk.CTk):
         top_bar = ctk.CTkFrame(tab, fg_color="#131d31", corner_radius=10)
         top_bar.pack(fill="x", padx=4, pady=(2, 8))
 
-        # 1-Click Clean All Button
+        # Recommended cleanup action
         self.clean_btn = ctk.CTkButton(
             top_bar,
-            text="🚀 1-CLICK CLEAN ALL",
+            text="Run recommended cleanup",
             fg_color="#0284c7",
             hover_color="#0369a1",
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
@@ -256,28 +273,30 @@ class DiskOptimizerApp(ctk.CTk):
         )
         self.clean_stop_btn.pack(side="left", padx=(0, 8), pady=8)
 
-        # Drive Scope Selector
-        scope_lbl = ctk.CTkLabel(top_bar, text="Target Scope:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
+        # Drive scope is populated from this computer's available drives.
+        scope_lbl = ctk.CTkLabel(top_bar, text="Drives:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
         scope_lbl.pack(side="left", padx=(8, 4))
 
-        self.scope_var = ctk.StringVar(value="All Drives (C: & D:)")
-        self.scope_seg = ctk.CTkSegmentedButton(
+        scope_values = list(self.drive_scope_map)
+        self.scope_var = ctk.StringVar(value=self.all_scope_label)
+        self.scope_seg = ctk.CTkOptionMenu(
             top_bar,
-            values=["All Drives (C: & D:)", "Drive C: Only", "Drive D: Only"],
+            values=scope_values,
             variable=self.scope_var,
-            selected_color="#0284c7",
-            selected_hover_color="#0369a1",
-            font=ctk.CTkFont(family="Segoe UI", size=11)
+            fg_color="#1e293b",
+            button_color="#334155",
+            width=138,
+            font=ctk.CTkFont(family="Segoe UI", size=10)
         )
         self.scope_seg.pack(side="left", padx=4)
 
-        # Preset Menu
+        # Simple presets keep less common cleanup opt-in.
         preset_lbl = ctk.CTkLabel(top_bar, text="Preset:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
         preset_lbl.pack(side="left", padx=(12, 4))
 
         self.preset_menu = ctk.CTkOptionMenu(
             top_bar,
-            values=["Safe Fast Clean", "Deep System Clean", "Drive D: Clean", "Developer Clean", "Select All", "Clear All"],
+            values=["Recommended Cleanup", "Browser & Developer Caches", "All Optional Caches", "Clear All"],
             command=self.apply_preset,
             fg_color="#1e293b",
             button_color="#334155",
@@ -286,7 +305,7 @@ class DiskOptimizerApp(ctk.CTk):
             height=34,
             corner_radius=8
         )
-        self.preset_menu.set("Safe Fast Clean")
+        self.preset_menu.set("Recommended Cleanup")
         self.preset_menu.pack(side="left", padx=4)
 
         # Split Container: Checklists Left, Terminal Right
@@ -421,49 +440,23 @@ class DiskOptimizerApp(ctk.CTk):
 
             self.tasks[key] = {"var": var, "label": label, "chk": chk, "default": default}
 
-        # CATEGORY 1: System Temp & Log Caches
-        c1 = create_category_card("System Temp & Error Logs", "🧹")
-        add_task(c1, "user_temp", "User Temp Folder ($env:TEMP)", True)
-        add_task(c1, "win_temp", "Windows Temp Folder (C:\\Windows\\Temp)", True)
-        add_task(c1, "wer_reports", "Windows Error Reporting (WER)", True)
-        add_task(c1, "thumb_cache", "Explorer Thumbnail Cache", True)
-        add_task(c1, "recent_items", "Recent Items Shortcuts", True)
-        add_task(c1, "recycle_bin", "Empty Recycle Bin (C: & D:)", True)
-        add_task(c1, "crash_dumps", "Crash Dumps & Minidumps", True)
-        add_task(c1, "font_d3d_icon", "FontCache, D3DSCache & IconCache", True)
+        basics = create_category_card("Recommended • temporary files only", "🧹")
+        add_task(basics, "user_temp", "Clear temporary files for this user", True)
+        add_task(basics, "win_temp", "Clear Windows temporary files", True)
+        add_task(basics, "thumb_cache", "Rebuildable thumbnail cache", True)
 
-        # CATEGORY 2: Drive D: Dedicated Cleanups
-        c2 = create_category_card("Drive D: Dedicated Cleanups", "💾")
-        add_task(c2, "drive_d_junk", "Clean D: Root VC++ Leftovers (25 items)", True, "D: Root")
-        add_task(c2, "drive_d_pycache", "Sweep D: Python __pycache__ & .pytest_cache", True, "D: Cache")
-
-        # CATEGORY 3: Browser & Developer Caches
-        c3 = create_category_card("Browser & Developer Caches", "🌐")
-        add_task(c3, "chrome_cache", "Google Chrome Caches (All Profiles)", True)
-        add_task(c3, "edge_cache", "Microsoft Edge Caches (All Profiles)", True)
-        add_task(c3, "pip_cache", "Python pip Cache ($env:LOCALAPPDATA\\pip\\cache)", True)
-        add_task(c3, "dev_superpack", "Developer Super-Pack (NPM, VS Code, Yarn)", True)
-        add_task(c3, "chrome_history", "Chrome Bloated History & Favicons (> 10MB)", False, "History >10MB")
-        add_task(c3, "old_playwright", "Old Playwright Versions (Keeps latest)", True)
-        add_task(c3, "old_opera", "Old Opera Versions (Keeps latest)", True)
-        add_task(c3, "mendeley_inst", "Mendeley Updater Installer File", True)
-
-        # CATEGORY 4: Windows Admin & Advanced System
-        c4 = create_category_card("Windows Admin & Advanced Optimizers", "🛡️")
-        add_task(c4, "win_update", "Windows Update Cache (SoftwareDistribution)", True, "Admin")
-        add_task(c4, "shadow_storage", "Shadow Storage & Old Restore Points (C: & D:)", True, "Admin")
-        add_task(c4, "cleanmgr", "Windows Cleanmgr with 13 VolumeCaches keys", True, "Admin")
-        add_task(c4, "delivery_opt", "Delivery Optimization P2P Update Cache", True, "Admin")
-        add_task(c4, "prefetch", "Windows Prefetch Cache (C:\\Windows\\Prefetch)", True, "Admin")
-        add_task(c4, "memory_dumps", "System MEMORY.DMP & LiveKernelReports", True, "Admin")
-        add_task(c4, "dns_flush", "Flush Windows DNS Resolver Cache", True)
-        add_task(c4, "hibernation", "Disable Hibernation (powercfg -h off, saves 4-8GB)", False, "Admin")
-
-        # CATEGORY 5: Deep Compaction & Advanced
-        c5 = create_category_card("Deep Storage & Compaction", "📦")
-        add_task(c5, "wsl_compact", "WSL Virtual Disk Compaction (diskpart ext4.vhdx)", False, "WSL Shutdown")
-        add_task(c5, "compact_os", "CompactOS System Binaries Compression (~5-10m)", False, "5-10 Mins")
-        add_task(c5, "bluestacks", "BlueStacks Complete Removal (Processes & Folders)", False, "DESTRUCTIVE")
+        optional = create_category_card("Optional • review before selecting", "＋")
+        add_task(optional, "wer_reports", "Windows error reports", False)
+        add_task(optional, "crash_dumps", "Crash dumps (removes troubleshooting data)", False)
+        add_task(optional, "recycle_bin", "Empty Recycle Bin (permanent)", False, "Review")
+        add_task(optional, "chrome_cache", "Chrome temporary cache", False)
+        add_task(optional, "edge_cache", "Edge temporary cache", False)
+        add_task(optional, "pip_cache", "Python package download cache", False)
+        add_task(optional, "dev_superpack", "NPM, VS Code and Yarn caches", False)
+        add_task(optional, "drive_d_pycache", "Python test caches on selected non-system drives", False)
+        add_task(optional, "delivery_opt", "Windows update download cache", False)
+        add_task(optional, "memory_dumps", "System memory dumps (removes troubleshooting data)", False, "Review")
+        add_task(optional, "dns_flush", "Refresh Windows DNS cache", False)
 
     # -----------------------------------------------------------------
     # TAB 2: LARGE FILES FINDER
@@ -478,14 +471,20 @@ class DiskOptimizerApp(ctk.CTk):
         # Drive selector
         dlbl = ctk.CTkLabel(ctrl, text="Drive:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
         dlbl.pack(side="left", padx=(12, 4), pady=8)
-        self.large_drive_var = ctk.StringVar(value="Both Drives (C: & D:)")
+        self.large_drive_choices = {
+            "System drive": [self.system_drive + "\\"],
+            "All available drives": list(self.available_drives),
+        }
+        for drive in self.available_drives:
+            self.large_drive_choices[f"Drive {drive[:2]}"] = [drive]
+        self.large_drive_var = ctk.StringVar(value="System drive")
         self.large_drive_menu = ctk.CTkOptionMenu(
             ctrl,
-            values=["Both Drives (C: & D:)", "Drive C: Only", "Drive D: Only"],
+            values=list(self.large_drive_choices),
             variable=self.large_drive_var,
             fg_color="#1e293b",
             button_color="#334155",
-            width=160
+            width=145
         )
         self.large_drive_menu.pack(side="left", padx=4)
 
@@ -611,14 +610,20 @@ class DiskOptimizerApp(ctk.CTk):
         dlbl = ctk.CTkLabel(ctrl, text="Target:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
         dlbl.pack(side="left", padx=(12, 4), pady=8)
 
-        self.dupe_target_var = ctk.StringVar(value="Drive D: (Recommended)")
+        self.dupe_target_choices = {
+            "User folder (recommended)": [os.path.expanduser("~")],
+            "All available drives": list(self.available_drives),
+        }
+        for drive in self.available_drives:
+            self.dupe_target_choices[f"Drive {drive[:2]}"] = [drive]
+        self.dupe_target_var = ctk.StringVar(value="User folder (recommended)")
         self.dupe_target_menu = ctk.CTkOptionMenu(
             ctrl,
-            values=["Drive D: (Recommended)", "Drive C: Users", "Both Drives (C: & D:)"],
+            values=list(self.dupe_target_choices),
             variable=self.dupe_target_var,
             fg_color="#1e293b",
             button_color="#334155",
-            width=180
+            width=175
         )
         self.dupe_target_menu.pack(side="left", padx=4)
 
@@ -729,14 +734,20 @@ class DiskOptimizerApp(ctk.CTk):
         dlbl = ctk.CTkLabel(ctrl, text="Target Drive:", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#94a3b8")
         dlbl.pack(side="left", padx=(12, 4), pady=8)
 
-        self.empty_target_var = ctk.StringVar(value="Drive D: (Entire Drive)")
+        self.empty_target_choices = {
+            "User folder (recommended)": [os.path.expanduser("~")],
+            "All available drives": list(self.available_drives),
+        }
+        for drive in self.available_drives:
+            self.empty_target_choices[f"Drive {drive[:2]}"] = [drive]
+        self.empty_target_var = ctk.StringVar(value="User folder (recommended)")
         self.empty_target_menu = ctk.CTkOptionMenu(
             ctrl,
-            values=["Drive D: (Entire Drive)", "Drive C: (User Folders)", "Both Drives"],
+            values=list(self.empty_target_choices),
             variable=self.empty_target_var,
             fg_color="#1e293b",
             button_color="#334155",
-            width=180
+            width=175
         )
         self.empty_target_menu.pack(side="left", padx=4)
 
@@ -853,24 +864,83 @@ class DiskOptimizerApp(ctk.CTk):
     # -----------------------------------------------------------------
 
     def refresh_all_disk_stats(self):
-        """Updates C: and D: drive telemetry in header (standard used-capacity meter)"""
-        stats_map = get_all_drives_stats(["C:\\", "D:\\"])
+        """Refresh storage and physical memory usage for this computer."""
+        stats_map = get_all_drives_stats(self.available_drives)
+        drive_order = sorted(
+            stats_map,
+            key=lambda drive: (drive != self.system_drive, drive)
+        )
+        visible_drives = drive_order[:2]
+        if set(visible_drives) != set(self.drive_cards):
+            for child in self.drive_cards_frame.winfo_children():
+                child.destroy()
+            self.drive_cards = {}
+            for drive in visible_drives:
+                card = ctk.CTkFrame(self.drive_cards_frame, fg_color="#1e293b", corner_radius=8)
+                card.pack(side="left", padx=4, pady=2)
+                label = ctk.CTkLabel(
+                    card,
+                    text=f"Drive {drive} checking...",
+                    font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+                    text_color="#f8fafc"
+                )
+                label.pack(padx=8, pady=(5, 2))
+                progress = ctk.CTkProgressBar(card, width=128, height=6, corner_radius=3)
+                progress.set(0)
+                progress.pack(padx=8, pady=(0, 6))
+                self.drive_cards[drive] = {"label": label, "progress": progress}
 
-        if "C:" in stats_map:
-            c = stats_map["C:"]
-            self.c_label.configure(text=f"Drive C: {c['free_gb']} GB Free ({c['used_percent']}% Used)")
-            used_ratio = max(0.0, min(1.0, c["used_bytes"] / c["total_bytes"])) if c["total_bytes"] > 0 else 0
-            self.c_progress.set(used_ratio)
-            self.c_progress.configure(progress_color="#ef4444" if c["used_percent"] >= 88 else "#10b981")
+        for drive, widgets in self.drive_cards.items():
+            stats = stats_map.get(drive)
+            if not stats:
+                widgets["label"].configure(text=f"Drive {drive} unavailable")
+                widgets["progress"].set(0)
+                continue
+            widgets["label"].configure(
+                text=f"{drive}  {stats['free_gb']} GB free • {stats['used_percent']}% used"
+            )
+            used_ratio = max(0.0, min(1.0, stats["used_percent"] / 100.0))
+            widgets["progress"].set(used_ratio)
+            widgets["progress"].configure(
+                progress_color="#ef4444" if stats["free_percent"] <= 12 else "#10b981"
+            )
 
-        if "D:" in stats_map:
-            d = stats_map["D:"]
-            self.d_label.configure(text=f"Drive D: {d['free_gb']} GB Free ({d['used_percent']}% Used)")
-            used_ratio = max(0.0, min(1.0, d["used_bytes"] / d["total_bytes"])) if d["total_bytes"] > 0 else 0
-            self.d_progress.set(used_ratio)
-            self.d_progress.configure(progress_color="#ef4444" if d["used_percent"] >= 88 else "#0284c7")
+        additional_count = max(0, len(drive_order) - len(visible_drives))
+        if additional_count:
+            if not hasattr(self, "other_drives_label"):
+                self.other_drives_label = ctk.CTkLabel(
+                    self.drive_cards_frame,
+                    text="",
+                    font=ctk.CTkFont(family="Segoe UI", size=9),
+                    text_color="#94a3b8"
+                )
+                self.other_drives_label.pack(side="left", padx=3)
+            self.other_drives_label.configure(text=f"+{additional_count} more")
+        elif hasattr(self, "other_drives_label"):
+            self.other_drives_label.destroy()
+            del self.other_drives_label
+
+        memory = get_memory_stats()
+        if memory:
+            self.memory_label.configure(
+                text=f"RAM  {memory['available_gb']} / {memory['total_gb']} GB free"
+            )
+            self.memory_progress.set(memory["used_percent"] / 100.0)
+            self.memory_progress.configure(
+                progress_color="#ef4444" if memory["used_percent"] >= 90 else "#38bdf8"
+            )
+        else:
+            self.memory_label.configure(text="RAM usage unavailable")
+            self.memory_progress.set(0)
 
         return stats_map
+
+    def open_task_manager(self):
+        """Open Windows Task Manager to review high-memory applications safely."""
+        try:
+            subprocess.Popen(["taskmgr.exe"])
+        except OSError as ex:
+            messagebox.showerror("Task Manager", f"Could not open Task Manager:\n{ex}")
 
     # -----------------------------------------------------------------
     # ELEVATION REQUEST
@@ -880,15 +950,21 @@ class DiskOptimizerApp(ctk.CTk):
         """Relaunches application with UAC Administrator rights"""
         try:
             import ctypes
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            launcher = os.path.join(base_dir, "launcher.pyw")
-            
-            # Prefer pythonw.exe to prevent flashing console
-            py_dir = os.path.dirname(sys.executable)
-            pythonw = os.path.join(py_dir, "pythonw.exe")
-            python_exe = pythonw if os.path.exists(pythonw) else sys.executable
+            if getattr(sys, "frozen", False):
+                base_dir = os.path.dirname(sys.executable)
+                target = sys.executable
+                parameters = ""
+            else:
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                launcher = os.path.join(base_dir, "launcher.pyw")
+                py_dir = os.path.dirname(sys.executable)
+                pythonw = os.path.join(py_dir, "pythonw.exe")
+                target = pythonw if os.path.exists(pythonw) else sys.executable
+                parameters = f'"{launcher}"'
 
-            ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, f'"{launcher}"', base_dir, 1)
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", target, parameters, base_dir, 1
+            )
             # Only exit if elevation was granted (ShellExecuteW returns > 32 on success)
             if ret > 32:
                 self.destroy()
@@ -902,53 +978,25 @@ class DiskOptimizerApp(ctk.CTk):
     # -----------------------------------------------------------------
 
     def apply_preset(self, choice: str):
-        if choice == "Safe Fast Clean":
-            self.scope_var.set("All Drives (C: & D:)")
-            safe_keys = {
-                "user_temp", "win_temp", "wer_reports", "thumb_cache",
-                "recent_items", "recycle_bin", "crash_dumps", "font_d3d_icon",
-                "drive_d_junk", "drive_d_pycache", "chrome_cache", "edge_cache",
-                "pip_cache", "dev_superpack", "old_playwright", "old_opera",
-                "mendeley_inst", "win_update", "shadow_storage", "cleanmgr",
-                "delivery_opt", "prefetch", "memory_dumps", "dns_flush"
+        if choice == "Recommended Cleanup":
+            self.scope_var.set(self.all_scope_label)
+            selected = {"user_temp", "win_temp", "thumb_cache"}
+        elif choice == "Browser & Developer Caches":
+            selected = {"chrome_cache", "edge_cache", "pip_cache", "dev_superpack"}
+        elif choice == "All Optional Caches":
+            selected = {
+                "wer_reports", "chrome_cache", "edge_cache", "pip_cache",
+                "dev_superpack", "drive_d_pycache", "delivery_opt", "dns_flush"
             }
-            for k, item in self.tasks.items():
-                item["var"].set(k in safe_keys)
-
-        elif choice == "Deep System Clean":
-            self.scope_var.set("All Drives (C: & D:)")
-            deep_keys = {
-                "user_temp", "win_temp", "wer_reports", "thumb_cache",
-                "recent_items", "recycle_bin", "crash_dumps", "font_d3d_icon",
-                "drive_d_junk", "drive_d_pycache", "chrome_cache", "edge_cache",
-                "pip_cache", "dev_superpack", "old_playwright",
-                "old_opera", "mendeley_inst", "win_update", "shadow_storage",
-                "cleanmgr", "delivery_opt", "prefetch", "memory_dumps", "dns_flush",
-                "hibernation", "wsl_compact", "compact_os"
-            }
-            for k, item in self.tasks.items():
-                item["var"].set(k in deep_keys)
-
-        elif choice == "Drive D: Clean":
-            d_keys = {"recycle_bin", "drive_d_junk", "drive_d_pycache", "shadow_storage"}
-            for k, item in self.tasks.items():
-                item["var"].set(k in d_keys)
-            self.scope_var.set("Drive D: Only")
-
-        elif choice == "Developer Clean":
-            self.scope_var.set("All Drives (C: & D:)")
-            dev_keys = {"pip_cache", "dev_superpack", "drive_d_pycache", "old_playwright"}
-            for k, item in self.tasks.items():
-                item["var"].set(k in dev_keys)
-
-        elif choice == "Select All":
-            self.scope_var.set("All Drives (C: & D:)")
-            for item in self.tasks.values():
-                item["var"].set(True)
-
         elif choice == "Clear All":
             for item in self.tasks.values():
                 item["var"].set(False)
+            return
+        else:
+            return
+
+        for key, item in self.tasks.items():
+            item["var"].set(key in selected)
 
     # -----------------------------------------------------------------
     # LOGGING & QUEUE
@@ -1013,24 +1061,9 @@ class DiskOptimizerApp(ctk.CTk):
             messagebox.showwarning("No Tasks Selected", "Please select at least one cleanup task to run.")
             return
 
-        # Destructive BlueStacks warning
-        if "bluestacks" in selected_keys:
-            confirm = messagebox.askyesno(
-                "Warning: BlueStacks Cleanup",
-                "You have selected 'BlueStacks Complete Removal'.\n"
-                "This will terminate all BlueStacks processes and permanently delete all BlueStacks data!\n\n"
-                "Do you want to proceed with BlueStacks removal?",
-                icon="warning"
-            )
-            if not confirm:
-                self.tasks["bluestacks"]["var"].set(False)
-                selected_keys.remove("bluestacks")
-                if not selected_keys:
-                    return
-
         # Smart Browser Detection Check
         check_browsers = []
-        if "chrome_cache" in selected_keys or "chrome_history" in selected_keys:
+        if "chrome_cache" in selected_keys:
             check_browsers.append("chrome")
         if "edge_cache" in selected_keys:
             check_browsers.append("msedge")
@@ -1052,10 +1085,25 @@ class DiskOptimizerApp(ctk.CTk):
                 elif resp is True:
                     stop_processes(running, self._enqueue_log)
                 else:
-                    for k in ["chrome_cache", "chrome_history", "edge_cache"]:
+                    for k in ["chrome_cache", "edge_cache"]:
                         if k in selected_keys:
                             selected_keys.remove(k)
                     self._enqueue_log("Browser caches skipped at user request.", "warning")
+
+        if not selected_keys:
+            messagebox.showinfo("Nothing to clean", "No selected cleanup tasks remain.")
+            return
+        task_summary = "\n".join(
+            f"• {self.tasks[key]['label']}" for key in selected_keys
+        )
+        if not messagebox.askyesno(
+            "Review cleanup",
+            "Only the selected temporary files and caches will be removed.\n"
+            "Personal files, browser history and saved passwords are not selected.\n\n"
+            f"{task_summary}\n\nContinue?",
+            icon="question"
+        ):
+            return
 
         # Set UI running state
         self.is_running = True
@@ -1065,9 +1113,10 @@ class DiskOptimizerApp(ctk.CTk):
         self.status_text.configure(text="Executing optimization tasks...")
         self.progress_bar.set(0.02)
         self.cleaned_bytes_total = 0
+        self.cleanup_errors = []
 
         # Snapshot initial free bytes
-        self.initial_free_map = get_all_drives_stats(["C:\\", "D:\\"])
+        self.initial_free_map = get_all_drives_stats(self.available_drives)
 
         scope = self.scope_var.get()
         self._enqueue_log("==================================================", "bold")
@@ -1080,39 +1129,28 @@ class DiskOptimizerApp(ctk.CTk):
         total_tasks = len(selected_keys)
         completed_tasks = 0
 
-        # Filter target drives based on scope
-        drives = ["C:", "D:"] if "All" in scope else (["C:"] if "C:" in scope else ["D:"])
+        # Resolve scope against drives detected on this computer.
+        drives = [drive[:2] for drive in self.drive_scope_map.get(scope, self.available_drives)]
+        system_selected = self.system_drive in drives
+        secondary_drives = [drive for drive in drives if drive != self.system_drive]
 
         task_dispatch = {
-            "user_temp": self.engine.clean_user_temp if "C:" in drives else None,
-            "win_temp": self.engine.clean_windows_temp if "C:" in drives else None,
-            "wer_reports": self.engine.clean_error_reports if "C:" in drives else None,
-            "thumb_cache": self.engine.clean_thumbnail_cache if "C:" in drives else None,
-            "recent_items": self.engine.clean_recent_items if "C:" in drives else None,
-            "recycle_bin": lambda: self.engine.clean_recycle_bin(drives),
-            "crash_dumps": self.engine.clean_crash_dumps if "C:" in drives else None,
-            "font_d3d_icon": self.engine.clean_font_d3ds_icon_cache if "C:" in drives else None,
-            "drive_d_junk": self.engine.clean_drive_d_root_junk if "D:" in drives else None,
-            "drive_d_pycache": self.engine.clean_drive_d_python_caches if "D:" in drives else None,
-            "chrome_cache": self.engine.clean_chrome_caches if "C:" in drives else None,
-            "edge_cache": self.engine.clean_edge_caches if "C:" in drives else None,
-            "pip_cache": self.engine.clean_pip_cache if "C:" in drives else None,
-            "dev_superpack": (lambda: self.engine.clean_developer_caches(drives)) if any(d in drives for d in ["C:", "D:"]) else None,
-            "chrome_history": self.engine.clean_bloated_chrome_history if "C:" in drives else None,
-            "old_playwright": self.engine.clean_old_playwright_versions if "C:" in drives else None,
-            "old_opera": self.engine.clean_old_opera_versions if "C:" in drives else None,
-            "mendeley_inst": self.engine.clean_mendeley_installer if "C:" in drives else None,
-            "bluestacks": self.engine.clean_bluestacks if "C:" in drives else None,
-            "win_update": self.engine.run_windows_update if "C:" in drives else None,
-            "shadow_storage": lambda: self.engine.run_shadow_storage_all() if "All" in scope else self.engine.run_shadow_storage(drives[0]),
-            "cleanmgr": self.engine.run_cleanmgr if "C:" in drives else None,
-            "delivery_opt": self.engine.run_delivery_optimization if "C:" in drives else None,
-            "prefetch": self.engine.run_prefetch if "C:" in drives else None,
-            "memory_dumps": self.engine.run_memory_dumps if "C:" in drives else None,
-            "dns_flush": self.engine.run_flush_dns,
-            "hibernation": self.engine.run_disable_hibernation if "C:" in drives else None,
-            "wsl_compact": self.engine.run_wsl_compact,
-            "compact_os": self.engine.run_compact_os if "C:" in drives else None,
+            "user_temp": self.engine.clean_user_temp if system_selected else None,
+            "win_temp": self.engine.clean_windows_temp if system_selected else None,
+            "wer_reports": self.engine.clean_error_reports if system_selected else None,
+            "thumb_cache": self.engine.clean_thumbnail_cache if system_selected else None,
+            "crash_dumps": self.engine.clean_crash_dumps if system_selected else None,
+            "recycle_bin": lambda: self.engine.clean_recycle_bin([d + "\\" for d in drives]),
+            "chrome_cache": self.engine.clean_chrome_caches if system_selected else None,
+            "edge_cache": self.engine.clean_edge_caches if system_selected else None,
+            "pip_cache": self.engine.clean_pip_cache if system_selected else None,
+            "dev_superpack": (lambda: self.engine.clean_developer_caches([self.system_drive])) if system_selected else None,
+            "drive_d_pycache": (
+                lambda: sum(self.engine.clean_drive_d_python_caches(d) for d in secondary_drives)
+            ) if secondary_drives else None,
+            "delivery_opt": self.engine.run_delivery_optimization if system_selected else None,
+            "memory_dumps": self.engine.run_memory_dumps if system_selected else None,
+            "dns_flush": self.engine.run_flush_dns if system_selected else None,
         }
 
         for key in selected_keys:
@@ -1125,6 +1163,7 @@ class DiskOptimizerApp(ctk.CTk):
                     freed = func() or 0
                     self.cleaned_bytes_total += freed
                 except Exception as ex:
+                    self.cleanup_errors.append(f"{key}: {ex}")
                     self._enqueue_log(f"Error executing {key}: {ex}", "error")
             else:
                 task_label = self.tasks.get(key, {}).get("label", key)
@@ -1163,16 +1202,26 @@ class DiskOptimizerApp(ctk.CTk):
 
         total_diff_gb = 0
         diff_msgs = []
-        for d in ["C:", "D:"]:
-            if d in final_stats and d in self.initial_free_map:
-                diff = final_stats[d]["free_bytes"] - self.initial_free_map[d]["free_bytes"]
+        for drive, stats in final_stats.items():
+            initial = self.initial_free_map.get(drive)
+            if initial:
+                diff = stats["free_bytes"] - initial["free_bytes"]
                 diff_gb = round(diff / (1024 ** 3), 2)
                 if diff_gb > 0:
                     total_diff_gb += diff_gb
-                    diff_msgs.append(f"{d} (+{diff_gb} GB)")
+                    diff_msgs.append(f"{drive} (+{diff_gb} GB)")
 
         self._enqueue_log("==================================================", "bold")
-        self._enqueue_log("=== DISK OPTIMIZER V2 RUN COMPLETED SUCCESSFULLY ===", "success")
+        if self.engine.should_stop:
+            result_title = "=== CLEANUP STOPPED ==="
+            result_level = "warning"
+        elif self.cleanup_errors:
+            result_title = "=== CLEANUP FINISHED WITH ISSUES ==="
+            result_level = "warning"
+        else:
+            result_title = "=== CLEANUP COMPLETE ==="
+            result_level = "success"
+        self._enqueue_log(result_title, result_level)
         if total_diff_gb > 0:
             msg_str = ", ".join(diff_msgs)
             self._enqueue_log(f"Total Disk Space Recovered: +{round(total_diff_gb, 2)} GB across {msg_str}!", "success")
@@ -1183,13 +1232,30 @@ class DiskOptimizerApp(ctk.CTk):
             self.recovered_label.configure(text=f"Freed: {mb} MB")
         self._enqueue_log("==================================================", "bold")
 
-        self.status_text.configure(text="Optimization completed successfully!")
+        if self.engine.should_stop:
+            self.status_text.configure(text="Cleanup stopped.")
+        elif self.cleanup_errors:
+            self.status_text.configure(text="Cleanup finished with issues.")
+        else:
+            self.status_text.configure(text="Cleanup complete.")
+
+        drive_summary = "\n".join(
+            f"{drive} {stats['free_gb']} GB free"
+            for drive, stats in final_stats.items()
+        ) or "No local drives are currently available."
+        recovered = (
+            f"Space recovered: about {round(total_diff_gb, 2)} GB"
+            if total_diff_gb > 0
+            else "No measurable free-space change."
+        )
+        issues = (
+            f"\n\nSome items could not be cleaned:\n{chr(10).join(self.cleanup_errors[:5])}"
+            if self.cleanup_errors
+            else ""
+        )
         messagebox.showinfo(
-            "Optimization Complete",
-            f"Optimization finished successfully!\n\n"
-            f"Drive C: {final_stats.get('C:', {}).get('free_gb', 0)} GB Free\n"
-            f"Drive D: {final_stats.get('D:', {}).get('free_gb', 0)} GB Free\n\n"
-            f"Recovered Space: +{round(total_diff_gb, 2)} GB" if total_diff_gb > 0 else "System caches cleared!"
+            "Cleanup finished",
+            f"{drive_summary}\n\n{recovered}{issues}"
         )
 
     # -----------------------------------------------------------------
@@ -1207,7 +1273,7 @@ class DiskOptimizerApp(ctk.CTk):
             self.large_tree.delete(row)
 
         target = self.large_drive_var.get()
-        roots = ["C:\\", "D:\\"] if "Both" in target else (["C:\\"] if "C:" in target else ["D:\\"])
+        roots = self.large_drive_choices.get(target, [self.system_drive + "\\"])
 
         size_text = self.large_size_var.get()
         min_mb = float(size_text.replace(">=", "").replace("MB", "").replace("GB", "").strip())
@@ -1309,12 +1375,7 @@ class DiskOptimizerApp(ctk.CTk):
             self.dupe_tree.delete(row)
 
         target = self.dupe_target_var.get()
-        if "D:" in target:
-            roots = ["D:\\"]
-        elif "C:" in target:
-            roots = [os.path.expanduser("~")]
-        else:
-            roots = ["D:\\", os.path.expanduser("~")]
+        roots = self.dupe_target_choices.get(target, [os.path.expanduser("~")])
 
         size_text = self.dupe_size_var.get()
         min_mb = float(size_text.replace(">=", "").replace("MB", "").strip())
@@ -1434,12 +1495,7 @@ class DiskOptimizerApp(ctk.CTk):
             self.empty_tree.delete(row)
 
         target = self.empty_target_var.get()
-        if "D:" in target:
-            roots = ["D:\\"]
-        elif "C:" in target:
-            roots = [os.path.expanduser("~")]
-        else:
-            roots = ["D:\\", os.path.expanduser("~")]
+        roots = self.empty_target_choices.get(target, [os.path.expanduser("~")])
 
         self.empty_status_lbl.configure(text=f"Scanning {', '.join(roots)} for empty folders...")
 

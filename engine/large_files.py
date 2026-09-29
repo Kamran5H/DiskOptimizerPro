@@ -1,4 +1,5 @@
 import os
+import math
 from typing import List, Dict, Callable, Optional, Tuple
 
 
@@ -27,6 +28,11 @@ def scan_large_files_multi(
         # Fall back to C:\ if no roots given; D:\ added only if it exists
         from engine.system_ops import get_all_detected_drives
         roots = get_all_detected_drives()
+
+    if isinstance(top_n, bool) or not isinstance(top_n, int) or top_n < 0:
+        raise ValueError("top_n must be a non-negative integer")
+    if not math.isfinite(min_size_mb) or min_size_mb < 0:
+        raise ValueError("min_size_mb must be a finite, non-negative number")
 
     min_bytes = int(min_size_mb * 1024 * 1024)
     import heapq
@@ -95,7 +101,7 @@ def scan_large_files_multi(
                         item_counter += 1
                         if len(heap) < top_n:
                             heapq.heappush(heap, (size, item_counter, item_dict))
-                        elif size > heap[0][0]:
+                        elif heap and size > heap[0][0]:
                             heapq.heappushpop(heap, (size, item_counter, item_dict))
                 except (OSError, PermissionError):
                     continue

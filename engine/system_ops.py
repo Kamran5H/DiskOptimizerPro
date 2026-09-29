@@ -3,6 +3,7 @@ import sys
 import ctypes
 import subprocess
 import tempfile
+from ctypes import wintypes
 from typing import Callable, Tuple, Optional, Dict, List
 
 # ---------------------------------------------------------------------------
@@ -22,18 +23,63 @@ def is_admin() -> bool:
 # ---------------------------------------------------------------------------
 
 def get_all_detected_drives() -> List[str]:
-    """Detects all valid fixed/removable logical drive paths on Windows."""
+    """Detects available local fixed and removable drives without assuming C: or D:."""
     try:
         bitmask = ctypes.windll.kernel32.GetLogicalDrives()
         drives = []
         for i in range(26):
             if bitmask & (1 << i):
                 drive_letter = chr(65 + i) + ":\\"
-                if os.path.exists(drive_letter):
+                drive_type = ctypes.windll.kernel32.GetDriveTypeW(
+                    ctypes.c_wchar_p(drive_letter)
+                )
+                if drive_type in (2, 3) and os.path.exists(drive_letter):
                     drives.append(drive_letter)
-        return drives or ["C:\\"]
+        return drives
     except Exception:
-        return ["C:\\", "D:\\"]
+        return []
+
+
+def get_system_drive() -> str:
+    """Return the drive containing the running Windows installation."""
+    windows_dir = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or r"C:\Windows"
+    drive, _ = os.path.splitdrive(windows_dir)
+    return drive.upper() or "C:"
+
+
+def get_memory_stats() -> Optional[dict]:
+    """Return physical memory usage via Windows, or None when it cannot be queried."""
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ("dwLength", wintypes.DWORD),
+            ("dwMemoryLoad", wintypes.DWORD),
+            ("ullTotalPhys", ctypes.c_ulonglong),
+            ("ullAvailPhys", ctypes.c_ulonglong),
+            ("ullTotalPageFile", ctypes.c_ulonglong),
+            ("ullAvailPageFile", ctypes.c_ulonglong),
+            ("ullTotalVirtual", ctypes.c_ulonglong),
+            ("ullAvailVirtual", ctypes.c_ulonglong),
+            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+        ]
+
+    try:
+        status = MEMORYSTATUSEX()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return None
+        total = status.ullTotalPhys
+        if total <= 0:
+            return None
+        used = total - status.ullAvailPhys
+        return {
+            "total_bytes": total,
+            "available_bytes": status.ullAvailPhys,
+            "used_percent": round(used / total * 100, 1),
+            "total_gb": round(total / (1024 ** 3), 1),
+            "available_gb": round(status.ullAvailPhys / (1024 ** 3), 1),
+        }
+    except (AttributeError, OSError):
+        return None
 
 
 def get_drive_details(drive: str = "C:\\") -> dict:
@@ -147,7 +193,6 @@ def get_all_drives_stats(drives: Optional[List[str]] = None) -> Dict[str, dict]:
 
 
 import threading
-from ctypes import wintypes
 
 
 # ---------------------------------------------------------------------------
